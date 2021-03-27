@@ -21,38 +21,64 @@
 {                                                                              }
 {******************************************************************************}
 
-program FB4D.IntegrationTests;
+unit FBHelpers;
 
-// Console Tester not support because a windows event handler is required for
-// aysnchrouns functions
+interface
 
-{$STRONGLINKTYPES ON}
 uses
-  System.SysUtils,
-  {$IFDEF TESTINSIGHT}
-  TestInsight.DUnitX,
-  {$ENDIF }
-  DUnitX.Loggers.GUI.VCL,
-  DUnitX.Loggers.Xml.NUnit,
+  System.Classes, System.SysUtils, System.JSON,
   DUnitX.TestFramework,
-  Config in 'Config.pas',
-  RealTimeDB in 'RealTimeDB.pas',
-  FBFunction in 'FBFunction.pas',
-  FirestoreDB in 'FirestoreDB.pas',
-  Authentication in 'Authentication.pas',
-  FBHelpers in 'FBHelpers.pas',
-  Storage in 'Storage.pas';
+  FB4D.Helpers;
 
-begin
-{$IFDEF TESTINSIGHT}
-  TestInsight.DUnitX.RunRegisteredTests;
-  exit;
-{$ENDIF}
-  try
-    TDUnitX.CheckCommandLine;
-    DUnitX.Loggers.GUI.VCL.Run;
-  except
-    on E: Exception do
-      System.Writeln(E.ClassName, ': ', E.Message);
+{$M+}
+type
+  [TestFixture]
+  UT_FBHelpers = class(TObject)
+  private
+  published
+    [TestCase]
+    procedure ConvertGUIDtoFBIDtoGUID;
   end;
+
+implementation
+
+{ UT_FBHelpers }
+
+procedure UT_FBHelpers.ConvertGUIDtoFBIDtoGUID;
+var
+  Guid: TGuid;
+  FBID: string;
+  c: integer;
+begin
+  Guid := TGuid.Empty;
+  FBID := TFirebaseHelpers.ConvertGUIDtoFBID(Guid);
+  Assert.AreEqual(Guid, TFirebaseHelpers.ConvertFBIDtoGUID(FBID));
+  Status('Empty GUID->FBID: ' + FBID);
+
+  Guid.D1 := $FEDCBA98;
+  Guid.D2 := $7654;
+  Guid.D3 := $3210;
+  Guid.D4[0] := $AA;
+  Guid.D4[1] := $55;
+  Guid.D4[2] := $55;
+  Guid.D4[3] := $AA;
+  Guid.D4[4] := $00;
+  Guid.D4[5] := $01;
+  Guid.D4[6] := $FF;
+  Guid.D4[7] := $FE;
+
+  FBID := TFirebaseHelpers.ConvertGUIDtoFBID(Guid);
+  Assert.AreEqual(Guid, TFirebaseHelpers.ConvertFBIDtoGUID(FBID));
+  Status('Artifical GUID->FBID: ' + FBID + ' GUID: ' + GUIDToString(Guid));
+
+  for c := 0 to 99 do
+  begin
+    Guid := TGuid.NewGuid;
+    FBID := TFirebaseHelpers.ConvertGUIDtoFBID(Guid);
+    Assert.AreEqual(Guid, TFirebaseHelpers.ConvertFBIDtoGUID(FBID));
+  end;
+end;
+
+initialization
+  TDUnitX.RegisterTestFixture(UT_FBHelpers);
 end.

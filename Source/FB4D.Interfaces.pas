@@ -39,6 +39,9 @@ uses
 {$I LinuxTypeDecl.inc}
 {$ENDIF}
 
+const
+  cDefaultCacheSpaceInBytes = 536870912; // 500 MByte
+
 type
   /// <summary>
   /// Firebase returns timestamps in UTC time zone (tzUTC). FB4D offers the
@@ -88,7 +91,8 @@ type
   TOnBeginTransaction = procedure(Transaction: TTransaction) of object;
 
   TObjectName = string;
-  TOnStorage = procedure(const ObjectName: TObjectName;
+  TOnStorage = procedure(Obj: IStorageObject) of object;
+  TOnStorageDeprecated = procedure(const ObjectName: TObjectName;
     Obj: IStorageObject) of object;
   TOnStorageError = procedure(const ObjectName: TObjectName;
     const ErrMsg: string) of object;
@@ -101,7 +105,8 @@ type
     type TOnSucccessCase = (oscUndef, oscFB, oscUser, oscFetchProvider,
       oscPwdVerification, oscGetUserData, oscRefreshToken, oscRTDBValue,
       oscRTDBDelete, oscRTDBServerVariable, oscDocument, oscDocuments,
-      oscBeginTransaction, oscStorage, oscDelStorage, oscFunctionSuccess);
+      oscBeginTransaction, oscStorage, oscStorageDeprecated, oscStorageUpload,
+      oscStorageGetAndDown, oscDelStorage, oscFunctionSuccess);
     constructor Create(OnResp: TOnFirebaseResp);
     constructor CreateUser(OnUserResp: TOnUserResponse);
     constructor CreateFetchProviders(OnFetchProvidersResp: TOnFetchProviders);
@@ -118,10 +123,14 @@ type
     constructor CreateFirestoreTransaction(
       OnBeginTransactionResp: TOnBeginTransaction);
     constructor CreateStorage(OnStorageResp: TOnStorage);
+    constructor CreateStorageDeprecated(OnStorageResp: TOnStorageDeprecated);
+    constructor CreateStorageGetAndDownload(OnStorageResp: TOnStorage;
+      OnStorageErrorResp: TOnRequestError; Stream: TStream);
+    constructor CreateStorageUpload(OnStorageResp: TOnStorage; Stream: TStream);
     constructor CreateDelStorage(OnDelStorageResp: TOnDeleteStorage);
     constructor CreateFunctionSuccess(OnFunctionSuccessResp: TOnFunctionSuccess);
     {$IFNDEF AUTOREFCOUNT}
-    case OnSucccessCase: TOnSucccessCase of
+    case OnSuccessCase: TOnSucccessCase of
       oscFB: (OnResponse: TOnFirebaseResp);
       oscUser: (OnUserResponse: TOnUserResponse);
       oscFetchProvider: (OnFetchProviders: TOnFetchProviders);
@@ -135,6 +144,14 @@ type
       oscDocuments: (OnDocuments: TOnDocuments);
       oscBeginTransaction: (OnBeginTransaction: TOnBeginTransaction);
       oscStorage: (OnStorage: TOnStorage);
+      oscStorageDeprecated: (OnStorageDeprecated: TOnStorageDeprecated);
+      oscStorageGetAndDown:
+        (OnStorageGetAndDown: TOnStorage;
+         OnStorageError: TOnRequestError;
+         DownStream: TStream);
+      oscStorageUpload:
+        (OnStorageUpload: TOnStorage;
+         UpStream: TStream);
       oscDelStorage: (OnDelStorage: TOnDeleteStorage);
       oscFunctionSuccess: (OnFunctionSuccess: TOnFunctionSuccess);
     {$ELSE}
@@ -153,6 +170,12 @@ type
       OnDocuments: TOnDocuments;
       OnBeginTransaction: TOnBeginTransaction;
       OnStorage: TOnStorage;
+      OnStorageDeprecated: TOnStorageDeprecated;
+      OnStorageGetAndDown: TOnStorage;
+      OnStorageError: TOnRequestError;
+      DownStream: TStream;
+      OnStorageUpload: TOnStorage;
+      UpStream: TStream;
       OnDelStorage: TOnDeleteStorage;
       OnFunctionSuccess: TOnFunctionSuccess;
     {$ENDIF}
@@ -220,6 +243,8 @@ type
   TOnServerTimeStamp = procedure(ServerTime: TDateTime) of object;
   TOnStopListenEvent = TNotifyEvent;
   TOnAuthRevokedEvent = procedure(TokenRenewPassed: boolean) of object;
+  TOnConnectionStateChange = procedure(ListenerConnected: boolean) of object;
+
   IRealTimeDB = interface(IInterface)
     procedure Get(ResourceParams: TRequestResourceParam;
       OnGetValue: TOnRTDBValue; OnRequestError: TOnRequestError;
@@ -243,9 +268,15 @@ type
       Data: TJSONValue; QueryParams: TQueryParams = nil): TJSONValue; // The caller has to free the TJSONValue
     procedure Delete(ResourceParams: TRequestResourceParam;
       OnDelete: TOnRTDBDelete; OnRequestError: TOnRequestError;
-      QueryParams: TQueryParams = nil);
+      QueryParams: TQueryParams); overload;
+      deprecated 'Use delete method without QueryParams instead';
+    procedure Delete(ResourceParams: TRequestResourceParam;
+      OnDelete: TOnRTDBDelete; OnRequestError: TOnRequestError); overload;
     function DeleteSynchronous(ResourceParams: TRequestResourceParam;
-      QueryParams: TQueryParams = nil): boolean;
+      QueryParams: TQueryParams): boolean; overload;
+      deprecated 'Use delete method without QueryParams instead';
+    function DeleteSynchronous(
+      ResourceParams: TRequestResourceParam): boolean; overload;
     // long time running request
     function ListenForValueEvents(ResourceParams: TRequestResourceParam;
       ListenEvent: TOnReceiveEvent; OnStopListening: TOnStopListenEvent;
@@ -410,8 +441,10 @@ type
       OnDeletedDoc: TOnDeletedDocument): cardinal;
     procedure Unsubscribe(TargetID: cardinal);
     procedure StartListener(OnStopListening: TOnStopListenEvent;
-      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil);
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil);
     procedure StopListener;
+    function GetTimeStampOfLastAccess: TDateTime;
     // Transaction
     procedure BeginReadOnlyTransaction(OnBeginTransaction: TOnBeginTransaction;
       OnRequestError: TOnRequestError);
@@ -574,6 +607,8 @@ type
       OnTokenRefresh: TOnTokenRefresh; OnError: TOnRequestError); overload;
     function CheckAndRefreshTokenSynchronous(
       IgnoreExpiryCheck: boolean = false): boolean;
+    // register call back in all circumstances when the token will be refreshed
+    procedure InstallTokenRefreshNotification(OnTokenRefresh: TOnTokenRefresh);
     // Getter methods
     function Authenticated: boolean;
     function Token: string;
@@ -595,14 +630,20 @@ type
       Params: TJSONObject = nil): TJSONObject;
   end;
 
-  TOnDownload = procedure(const ObjectName: TObjectName; Obj: IStorageObject)
-    of object;
+  TOnDownload = procedure(Obj: IStorageObject) of object;
+  TOnDownloadDeprecated = procedure(const ObjectName: TObjectName;
+    Obj: IStorageObject) of object;
   TOnDownloadError = procedure(Obj: IStorageObject;
     const ErrorMsg: string) of object;
   EStorageObject = class(Exception);
   IStorageObject = interface(IInterface)
+    procedure DownloadToStream(Stream: TStream;
+      OnSuccess: TOnDownload; OnError: TOnDownloadError); overload;
+    procedure DownloadToStream(Stream: TStream;
+      OnSuccess: TOnDownload; OnError: TOnStorageError); overload;
     procedure DownloadToStream(const ObjectName: TObjectName; Stream: TStream;
-      OnSuccess: TOnDownload; OnError: TOnDownloadError);
+      OnSuccess: TOnDownloadDeprecated; OnError: TOnDownloadError); overload;
+      deprecated 'Use method without ObjectName instead';
     procedure DownloadToStreamSynchronous(Stream: TStream);
     function ObjectName(IncludePath: boolean = true): string;
     function Path: string;
@@ -619,14 +660,20 @@ type
     function etag: string;
     function generation: Int64;
     function metaGeneration: Int64;
+    function CacheFileName: string;
   end;
 
   IFirebaseStorage = interface(IInterface)
     procedure Get(const ObjectName: TObjectName; OnGetStorage: TOnStorage;
       OnGetError: TOnStorageError); overload;
-    procedure Get(const ObjectName, RequestID: string; OnGetStorage: TOnStorage;
-      OnGetError: TOnRequestError); overload; deprecated;
+    procedure Get(const ObjectName, RequestID: string;
+      OnGetStorage: TOnStorageDeprecated; OnGetError: TOnRequestError);
+      overload; deprecated 'Use method without RequestID instead';
     function GetSynchronous(const ObjectName: TObjectName): IStorageObject;
+    procedure GetAndDownload(const ObjectName: TObjectName; Stream: TStream;
+      OnGetStorage: TOnStorage; OnGetError: TOnRequestError);
+    function GetAndDownloadSynchronous(const ObjectName: TObjectName;
+      Stream: TStream): IStorageObject;
     procedure Delete(const ObjectName: TObjectName; OnDelete: TOnDeleteStorage;
       OnDelError: TOnStorageError);
     procedure DeleteSynchronous(const ObjectName: TObjectName);
@@ -636,6 +683,14 @@ type
     function UploadSynchronousFromStream(Stream: TStream;
       const ObjectName: TObjectName;
       ContentType: TRESTContentType): IStorageObject;
+
+    // Long-term storage (beyond the runtime of the app) of loaded storage files
+    procedure SetupCacheFolder(const FolderName: string;
+      MaxCacheSpaceInBytes: longint = cDefaultCacheSpaceInBytes);
+    function IsCacheInUse: boolean;
+    function IsCacheScanFinished: boolean;
+    procedure ClearCache;
+    function CacheUsageInPercent: extended;
   end;
 
   /// <summary>
@@ -694,9 +749,9 @@ implementation
 constructor TOnSuccess.Create(OnResp: TOnFirebaseResp);
 begin
   if assigned(OnResp) then
-    OnSucccessCase := oscFB
+    OnSuccessCase := oscFB
   else
-    OnSucccessCase := oscUndef;
+    OnSuccessCase := oscUndef;
   {$IFDEF AUTOREFCOUNT}
   OnUserResponse := nil;
   OnFetchProviders := nil;
@@ -710,16 +765,21 @@ begin
   OnDocuments := nil;
   OnBeginTransaction := nil;
   OnStorage := nil;
+  OnStorageGetAndDown := nil;
+  OnStorageUpload := nil;
   OnDelStorage := nil;
   OnFunctionSuccess := nil;
   {$ENDIF}
+  OnStorageError := nil;
+  DownStream := nil;
+  UpStream := nil;
   OnResponse := OnResp;
 end;
 
 constructor TOnSuccess.CreateUser(OnUserResp: TOnUserResponse);
 begin
   Create(nil);
-  OnSucccessCase := oscUser;
+  OnSuccessCase := oscUser;
   OnUserResponse := OnUserResp;
 end;
 
@@ -727,7 +787,7 @@ constructor TOnSuccess.CreateFetchProviders(
   OnFetchProvidersResp: TOnFetchProviders);
 begin
   Create(nil);
-  OnSucccessCase := oscFetchProvider;
+  OnSuccessCase := oscFetchProvider;
   OnFetchProviders := OnFetchProvidersResp;
 end;
 
@@ -735,35 +795,35 @@ constructor TOnSuccess.CreatePasswordVerification(
   OnPasswordVerificationResp: TOnPasswordVerification);
 begin
   Create(nil);
-  OnSucccessCase := oscPwdVerification;
+  OnSuccessCase := oscPwdVerification;
   OnPasswordVerification := OnPasswordVerificationResp;
 end;
 
 constructor TOnSuccess.CreateGetUserData(OnGetUserDataResp: TOnGetUserData);
 begin
   Create(nil);
-  OnSucccessCase := oscGetUserData;
+  OnSuccessCase := oscGetUserData;
   OnGetUserData := OnGetUserDataResp;
 end;
 
 constructor TOnSuccess.CreateRefreshToken(OnRefreshTokenResp: TOnTokenRefresh);
 begin
   Create(nil);
-  OnSucccessCase := oscRefreshToken;
+  OnSuccessCase := oscRefreshToken;
   OnRefreshToken := OnRefreshTokenResp;
 end;
 
 constructor TOnSuccess.CreateRTDBValue(OnRTDBValueResp: TOnRTDBValue);
 begin
   Create(nil);
-  OnSucccessCase := oscRTDBValue;
+  OnSuccessCase := oscRTDBValue;
   OnRTDBValue := OnRTDBValueResp;
 end;
 
 constructor TOnSuccess.CreateRTDBDelete(OnRTDBDeleteResp: TOnRTDBDelete);
 begin
   Create(nil);
-  OnSucccessCase := oscRTDBDelete;
+  OnSuccessCase := oscRTDBDelete;
   OnRTDBDelete := OnRTDBDeleteResp;
 end;
 
@@ -771,21 +831,21 @@ constructor TOnSuccess.CreateRTDBServerVariable(
   OnRTDBServerVariableResp: TOnRTDBServerVariable);
 begin
   Create(nil);
-  OnSucccessCase := oscRTDBServerVariable;
+  OnSuccessCase := oscRTDBServerVariable;
   OnRTDBServerVariable := OnRTDBServerVariableResp;
 end;
 
 constructor TOnSuccess.CreateFirestoreDoc(OnDocumentResp: TOnDocument);
 begin
   Create(nil);
-  OnSucccessCase := oscDocument;
+  OnSuccessCase := oscDocument;
   OnDocument := OnDocumentResp;
 end;
 
 constructor TOnSuccess.CreateFirestoreDocs(OnDocumentsResp: TOnDocuments);
 begin
   Create(nil);
-  OnSucccessCase := oscDocuments;
+  OnSuccessCase := oscDocuments;
   OnDocuments := OnDocumentsResp;
 end;
 
@@ -793,21 +853,48 @@ constructor TOnSuccess.CreateFirestoreTransaction(
   OnBeginTransactionResp: TOnBeginTransaction);
 begin
   Create(nil);
-  OnSucccessCase := oscBeginTransaction;
+  OnSuccessCase := oscBeginTransaction;
   OnBeginTransaction := OnBeginTransactionResp;
 end;
 
 constructor TOnSuccess.CreateStorage(OnStorageResp: TOnStorage);
 begin
   Create(nil);
-  OnSucccessCase := oscStorage;
+  OnSuccessCase := oscStorage;
   OnStorage := OnStorageResp;
+end;
+
+constructor TOnSuccess.CreateStorageDeprecated(
+  OnStorageResp: TOnStorageDeprecated);
+begin
+  Create(nil);
+  OnSuccessCase := oscStorageDeprecated;
+  OnStorageDeprecated := OnStorageResp;
+end;
+
+constructor TOnSuccess.CreateStorageGetAndDownload(OnStorageResp: TOnStorage;
+  OnStorageErrorResp: TOnRequestError; Stream: TStream);
+begin
+  Create(nil);
+  OnSuccessCase := oscStorageGetAndDown;
+  OnStorageGetAndDown := OnStorageResp;
+  OnStorageError := OnStorageErrorResp;
+  DownStream := Stream;
+end;
+
+constructor TOnSuccess.CreateStorageUpload(OnStorageResp: TOnStorage;
+  Stream: TStream);
+begin
+  Create(nil);
+  OnSuccessCase := oscStorageUpload;
+  OnStorageUpload := OnStorageResp;
+  UpStream := Stream;
 end;
 
 constructor TOnSuccess.CreateDelStorage(OnDelStorageResp: TOnDeleteStorage);
 begin
   Create(nil);
-  OnSucccessCase := oscDelStorage;
+  OnSuccessCase := oscDelStorage;
   OnDelStorage := OnDelStorageResp;
 end;
 
@@ -815,7 +902,7 @@ constructor TOnSuccess.CreateFunctionSuccess(
   OnFunctionSuccessResp: TOnFunctionSuccess);
 begin
   Create(nil);
-  OnSucccessCase := oscFunctionSuccess;
+  OnSuccessCase := oscFunctionSuccess;
   OnFunctionSuccess := OnFunctionSuccessResp;
 end;
 

@@ -61,8 +61,10 @@ type
     Text1: TText;
     shpProfile: TCircle;
     ImageList: TImageList;
+    imgCloudOff: TImage;
+    layVirtualKeyboardSpace: TLayout;
+    rctBack: TRectangle;
     procedure FormCreate(Sender: TObject);
-    procedure FormClose(Sender: TObject; var Action: TCloseAction);
     procedure btnSignOutClick(Sender: TObject);
     procedure btnPushMessageClick(Sender: TObject);
     procedure edtMessageKeyUp(Sender: TObject; var Key: Word; var KeyChar: Char;
@@ -75,6 +77,8 @@ type
     procedure FormDestroy(Sender: TObject);
     procedure lsvChatUpdateObjects(const Sender: TObject;
       const AItem: TListViewItem);
+    procedure FormVirtualKeyboard(Sender: TObject;
+      KeyboardVisible: Boolean; const Bounds: TRect);
   private type
     TPendingProfile = class
       Items: TList<TListViewItem>;
@@ -94,7 +98,9 @@ type
     function GetAuth: IFirebaseAuthentication;
     function GetStorage: IFirebaseStorage;
     function GetSettingFilename: string;
+    function GetCacheFolder: string;
     procedure SaveSettings;
+    procedure OnTokenRefresh(TokenRefreshed: boolean);
     procedure OnUserLogin(const Info: string; User: IFirebaseUser);
     procedure StartChat;
     procedure WipeToTab(ActiveTab: TTabItem);
@@ -109,6 +115,7 @@ type
       TimeStamp: TDateTime);
     procedure OnListenerError(const RequestID, ErrMsg: string);
     procedure OnStopListening(Sender: TObject);
+    procedure OnConnectionStateChange(ListenerConnected: boolean);
     function SearchItem(const DocId: string): TListViewItem;
     procedure OnDocWrite(const Info: string; Document: IFirestoreDocument);
     procedure OnDocWriteError(const RequestID, ErrMsg: string);
@@ -117,8 +124,9 @@ type
     function AddProfileImgToImageList(const UID: string; Img: TBitmap): integer;
     procedure DownloadProfileImgAndAddToImageList(const UID: string;
       Item: TListViewItem);
-    procedure OnGetStorage(const ObjName: string; Obj: IStorageObject);
-    procedure OnStorageDownload(const ObjName: string; Obj: IStorageObject);
+    procedure OnStorageDownload(Obj: IStorageObject);
+    procedure OnGetStorageError(const ObjectName: TObjectName;
+      const ErrMsg: string);
   end;
 
 var
@@ -128,9 +136,10 @@ implementation
 
 uses
   System.IniFiles, System.IOUtils, System.JSON, System.Math,
-  FB4D.Helpers, FB4D.Firestore, FB4D.Document;
+  FB4D.Helpers, FB4D.Firestore, FB4D.Document, FB4D.Storage;
 
 {$R *.fmx}
+{$R *.LgXhdpiPh.fmx ANDROID}
 
 const
   cDocID = 'Chat';
@@ -175,17 +184,12 @@ end;
 procedure TfmxChatMain.FormDestroy(Sender: TObject);
 begin
   fPendingProfiles.Free;
+  FreeAndNil(fConfig);
 end;
 
 procedure TfmxChatMain.FraSelfRegistrationbtnCheckEMailClick(Sender: TObject);
 begin
   FraSelfRegistration.btnCheckEMailClick(Sender);
-end;
-
-procedure TfmxChatMain.FormClose(Sender: TObject; var Action: TCloseAction);
-begin
-  SaveSettings;
-  FreeAndNil(fConfig);
 end;
 
 procedure TfmxChatMain.SaveSettings;
@@ -208,10 +212,16 @@ begin
   end;
 end;
 
+procedure TfmxChatMain.OnTokenRefresh(TokenRefreshed: boolean);
+begin
+  SaveSettings;
+end;
+
 function TfmxChatMain.GetAuth: IFirebaseAuthentication;
 begin
   fConfig := TFirebaseConfiguration.Create(edtKey.Text, edtProjectID.Text);
   result := fConfig.Auth;
+  result.InstallTokenRefreshNotification(OnTokenRefresh);
   edtKey.Enabled := false;
   edtProjectID.Enabled := false;
 end;
@@ -219,9 +229,12 @@ end;
 function TfmxChatMain.GetStorage: IFirebaseStorage;
 begin
   Assert(assigned(fConfig), 'FirebaseConfiguration not initialized');
-  if not edtBucket.Text.IsEmpty then
+  if not edtBucket.Text.IsEmpty and edtBucket.Enabled then
+  begin
     edtBucket.Enabled := false;
-  fConfig.SetBucket(edtBucket.Text);
+    fConfig.SetBucket(edtBucket.Text);
+    fConfig.Storage.SetupCacheFolder(GetCacheFolder);
+  end;
   result := fConfig.Storage;
 end;
 
@@ -239,12 +252,27 @@ begin
     ) + FileName + TFirebaseHelpers.GetPlatform + '.ini';
 end;
 
+function TfmxChatMain.GetCacheFolder: string;
+var
+  FileName: string;
+begin
+  FileName := ChangeFileExt(ExtractFileName(ParamStr(0)), '');
+  result := IncludeTrailingPathDelimiter(
+{$IFDEF IOS}
+    TPath.GetDocumentsPath
+{$ELSE}
+    TPath.GetHomePath
+{$ENDIF}
+    ) + IncludeTrailingPathDelimiter(FileName);
+end;
+
 procedure TfmxChatMain.OnUserLogin(const Info: string; User: IFirebaseUser);
 begin
   fUID := User.UID;
   fUserName := User.DisplayName;
   if assigned(FraSelfRegistration.ProfileImg) then
     shpProfile.Fill.Bitmap.Bitmap.Assign(FraSelfRegistration.ProfileImg);
+  SaveSettings;
   StartChat;
 end;
 
@@ -278,11 +306,23 @@ end;
 
 procedure TfmxChatMain.StartChat;
 begin
+  GetStorage;
+  while not fConfig.Storage.IsCacheScanFinished do
+  begin
+    FraSelfRegistration.InformDelayedStart('starting...');
+    if Application.Terminated then
+      exit
+    else
+      TFirebaseHelpers.SleepAndMessageLoop(1);
+  end;
+  FraSelfRegistration.StopDelayedStart;
   lblUserInfo.Text := fUserName + ' logged in';
+  edtMessage.Text := '';
   fConfig.Database.SubscribeQuery(TStructuredQuery.CreateForCollection(cDocID).
     OrderBy('DateTime', odAscending),
     OnChangedColDocument, OnDeletedColDocument);
-  fConfig.Database.StartListener(OnStopListening, OnListenerError, OnAuthRevoked);
+  fConfig.Database.StartListener(OnStopListening, OnListenerError,
+    OnAuthRevoked, OnConnectionStateChange);
   btnEditMessage.Visible := false;
   btnDeleteMessage.Visible := false;
   btnPushMessage.Visible := true;
@@ -378,9 +418,24 @@ begin
   finally
     lsvChat.EndUpdate;
   end;
-  lsvChat.Selected := Item;
+  lsvChat.ScrollTo(Item.Index);
   txtUpdate.Text := 'Last message written at ' +
     FormatDateTime('HH:NN:SS.ZZZ', Document.UpdateTime);
+end;
+
+procedure TfmxChatMain.OnConnectionStateChange(ListenerConnected: boolean);
+begin
+  if ListenerConnected then
+  begin
+    txtUpdate.Text := 'Server reconnected at ' + TimeToStr(now);
+    imgCloudOff.Visible := false;
+    shpProfile.Visible := true;
+  end else begin
+    txtUpdate.Text := 'Server disconnected at ' +
+      TimeToStr(fConfig.Database.GetTimeStampOfLastAccess);
+    imgCloudOff.Visible := true;
+    shpProfile.Visible := false;
+  end;
 end;
 
 procedure TfmxChatMain.lsvChatItemClick(const Sender: TObject;
@@ -515,7 +570,7 @@ end;
 
 procedure TfmxChatMain.OnDocDeleteError(const RequestID, ErrMsg: string);
 begin
-  txtUpdate.Text := 'Failre while deleted message ' + ErrMsg;
+  txtError.Text := 'Failure while deleted message ' + ErrMsg;
 end;
 
 procedure TfmxChatMain.OnStopListening(Sender: TObject);
@@ -632,26 +687,16 @@ begin
   if fPendingProfiles.TryGetValue(UID, Profile) then
     Profile.Items.Add(Item)
   else begin
-    fPendingProfiles.Add(UID, TPendingProfile.Create(Item));
+    Profile := TPendingProfile.Create(Item);
+    fPendingProfiles.Add(UID, Profile);
     GetStorage; // Ensure that Bucket is sent to Config
-    fConfig.Storage.Get(TFraSelfRegistration.cDefaultStoragePathForProfileImg +
-      '/' + UID, OnGetStorage, nil);
+    fConfig.Storage.GetAndDownload(
+      TFraSelfRegistration.cDefaultStoragePathForProfileImg + '/' + UID,
+      Profile.Stream, OnStorageDownload, OnGetStorageError);
   end;
 end;
 
-procedure TfmxChatMain.OnGetStorage(const ObjName: string; Obj: IStorageObject);
-var
-  Profile: TPendingProfile;
-  UID: string;
-begin
-  UID := Obj.ObjectName(false);
-  Profile := fPendingProfiles.Items[UID];
-  Assert(assigned(Profile), 'Invalid profile');
-  Obj.DownloadToStream(ObjName, Profile.Stream, OnStorageDownload, nil);
-end;
-
-procedure TfmxChatMain.OnStorageDownload(const ObjName: string;
-  Obj: IStorageObject);
+procedure TfmxChatMain.OnStorageDownload(Obj: IStorageObject);
 var
   Profile: TPendingProfile;
   Bmp: TBitmap;
@@ -679,6 +724,24 @@ begin
   end;
   fPendingProfiles.Remove(UID);
   Profile.Free;
+end;
+
+procedure TfmxChatMain.OnGetStorageError(const ObjectName: TObjectName;
+  const ErrMsg: string);
+begin
+  // Do not remove the assoziated profile from fPendingProfiles to prevent retry
+end;
+
+procedure TfmxChatMain.FormVirtualKeyboard(Sender: TObject;
+  KeyboardVisible: Boolean; const Bounds: TRect);
+begin
+  {$IFDEF ANDROID}
+  // Simple workaround for problem with covered controls from virtual keyboard
+  layVirtualKeyboardSpace.Height := Bounds.Height;
+  layVirtualKeyboardSpace.Visible := KeyboardVisible;
+  if TabControl.ActiveTab = tabChat then
+    lsvChat.ScrollTo(lsvChat.ItemCount - 1);
+  {$ENDIF}
 end;
 
 { TfmxChatMain.TPendingProfile }

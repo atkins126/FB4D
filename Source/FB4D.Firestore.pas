@@ -43,6 +43,7 @@ type
     fDatabaseID: string;
     fAuth: IFirebaseAuthentication;
     fListener: TListenerThread;
+    fLastReceivedMsg: TDateTime;
     function BaseURI: string;
     procedure OnQueryResponse(const RequestID: string;
       Response: IFirebaseResponse);
@@ -56,7 +57,7 @@ type
       Response: IFirebaseResponse);
     procedure OnDeleteResponse(const RequestID: string;
       Response: IFirebaseResponse);
-    procedure BeginReadOnlyTransactionRespose(const RequestID: string;
+    procedure BeginReadOnlyTransactionResp(const RequestID: string;
       Response: IFirebaseResponse);
   public
     constructor Create(const ProjectID: string; Auth: IFirebaseAuthentication;
@@ -109,8 +110,10 @@ type
       OnDeletedDoc: TOnDeletedDocument): cardinal;
     procedure Unsubscribe(TargetID: cardinal);
     procedure StartListener(OnStopListening: TOnStopListenEvent;
-      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil);
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil);
     procedure StopListener;
+    function GetTimeStampOfLastAccess: TDateTime;
     // Transaction
     procedure BeginReadOnlyTransaction(OnBeginTransaction: TOnBeginTransaction;
       OnRequestError: TOnRequestError);
@@ -218,6 +221,7 @@ begin
   fAuth := Auth;
   fDatabaseID := DatabaseID;
   fListener := TListenerThread.Create(ProjectID, DatabaseID, Auth);
+  fLastReceivedMsg := 0;
 end;
 
 destructor TFirestoreDatabase.Destroy;
@@ -253,6 +257,7 @@ var
   Documents: IFirestoreDocuments;
 begin
   try
+    fLastReceivedMsg := now;
     Response.CheckForJSONArr;
     Documents := TFirestoreDocuments.CreateFromJSONArr(Response);
     if assigned(Response.OnSuccess.OnDocuments) then
@@ -263,7 +268,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnQueryResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -281,6 +287,7 @@ begin
   Query := StructuredQuery.AsJSON;
   Response := Request.SendRequestSynchronous([''], rmPost, Query, QueryParams);
   Response.CheckForJSONArr;
+  fLastReceivedMsg := now;
   result := TFirestoreDocuments.CreateFromJSONArr(Response);
 end;
 
@@ -315,6 +322,7 @@ begin
   Query := StructuredQuery.AsJSON;
   Response := Request.SendRequestSynchronous([''], rmPost, Query, QueryParams);
   Response.CheckForJSONArr;
+  fLastReceivedMsg := now;
   result := TFirestoreDocuments.CreateFromJSONArr(Response);
 end;
 
@@ -336,6 +344,7 @@ var
   Documents: IFirestoreDocuments;
 begin
   try
+    fLastReceivedMsg := now;
     if not Response.StatusNotFound then
     begin
       Response.CheckForJSONObj;
@@ -350,7 +359,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnGetResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -364,6 +374,7 @@ begin
   result := nil;
   Request := TFirebaseRequest.Create(BaseURI, '', fAuth);
   Response := Request.SendRequestSynchronous(Params, rmGet, nil, QueryParams);
+  fLastReceivedMsg := now;
   if not Response.StatusNotFound then
   begin
     Response.CheckForJSONObj;
@@ -390,6 +401,7 @@ var
   Document: IFirestoreDocument;
 begin
   try
+    fLastReceivedMsg := now;
     if not Response.StatusNotFound then
     begin
       Response.CheckForJSONObj;
@@ -404,7 +416,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnCreateResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -420,6 +433,7 @@ begin
   Request := TFirebaseRequest.Create(BaseURI, '', fAuth);
   Response := Request.SendRequestSynchronous(DocumentPath, rmPost, nil,
     QueryParams);
+  fLastReceivedMsg := now;
   if not Response.StatusNotFound then
   begin
     Response.CheckForJSONObj;
@@ -438,7 +452,8 @@ begin
   Request := TFirebaseRequest.Create(BaseURI, rsInsertOrUpdateDoc +
     TFirebaseHelpers.ArrStrToCommaStr(DocumentPath), fAuth);
 {$IFDEF DEBUG}
-  TFirebaseHelpers.Log(' Document: ' + Document.AsJSON.ToJSON);
+  TFirebaseHelpers.Log('FirestoreDatabase.InsertOrUpdateDocument ' +
+    Document.AsJSON.ToJSON);
 {$ENDIF}
   Request.SendRequest(DocumentPath, rmPatch, Document.AsJSON, QueryParams,
     tmBearer, OnInsertOrUpdateResponse, OnRequestError,
@@ -451,6 +466,7 @@ var
   Document: IFirestoreDocument;
 begin
   try
+    fLastReceivedMsg := now;
     if not Response.StatusNotFound then
     begin
       Response.CheckForJSONObj;
@@ -466,7 +482,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnInsertOrUpdateResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -481,10 +498,12 @@ begin
   result := nil;
   Request := TFirebaseRequest.Create(BaseURI, '', fAuth);
 {$IFDEF DEBUG}
-  TFirebaseHelpers.Log(' Document: ' + Document.AsJSON.ToJSON);
+  TFirebaseHelpers.Log('FirestoreDatabase.InsertOrUpdateDocumentSynchronous ' +
+    Document.AsJSON.ToJSON);
 {$ENDIF}
   Response := Request.SendRequestSynchronous(DocumentPath, rmPatch,
     Document.AsJSON, QueryParams);
+  fLastReceivedMsg := now;
   if not Response.StatusNotFound then
   begin
     Response.CheckForJSONObj;
@@ -504,7 +523,8 @@ begin
   Request := TFirebaseRequest.Create(BaseURI, rsPatchDoc +
     TFirebaseHelpers.ArrStrToCommaStr(DocumentPath), fAuth);
 {$IFDEF DEBUG}
-  TFirebaseHelpers.Log(' Document: ' + DocumentPart.AsJSON.ToJSON);
+  TFirebaseHelpers.Log('FirestoreDatabase.PatchDocument ' +
+    DocumentPart.AsJSON.ToJSON);
 {$ENDIF}
   QueryParams := TQueryParams.Create;
   try
@@ -526,6 +546,7 @@ var
   Document: IFirestoreDocument;
 begin
   try
+    fLastReceivedMsg := now;
     if not Response.StatusNotFound then
     begin
       Response.CheckForJSONObj;
@@ -540,7 +561,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnPatchResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -556,7 +578,8 @@ begin
   result := nil;
   Request := TFirebaseRequest.Create(BaseURI, '', fAuth);
 {$IFDEF DEBUG}
-  TFirebaseHelpers.Log(' Document: ' + DocumentPart.AsJSON.ToJSON);
+  TFirebaseHelpers.Log('FirestoreDatabase.PatchDocumentSynchronous ' +
+    DocumentPart.AsJSON.ToJSON);
 {$ENDIF}
   QueryParams := TQueryParams.Create;
   try
@@ -569,6 +592,7 @@ begin
   finally
     QueryParams.Free;
   end;
+  fLastReceivedMsg := now;
   if not Response.StatusNotFound then
   begin
     Response.CheckForJSONObj;
@@ -593,6 +617,7 @@ procedure TFirestoreDatabase.OnDeleteResponse(const RequestID: string;
   Response: IFirebaseResponse);
 begin
   try
+    fLastReceivedMsg := now;
     Response.CheckForJSONObj;
     if assigned(Response.OnSuccess.OnResponse) then
       Response.OnSuccess.OnResponse(RequestID, Response);
@@ -602,7 +627,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.OnDeleteResponse', RequestID, e.Message]);
     end;
   end;
 end;
@@ -613,6 +639,7 @@ var
   Request: IFirebaseRequest;
 begin
   Request := TFirebaseRequest.Create(BaseURI, rsDeleteDoc, fAuth);
+  fLastReceivedMsg := now;
   result := Request.SendRequestSynchronous(Params, rmDELETE, nil, QueryParams);
 end;
 
@@ -628,16 +655,17 @@ begin
   Data := TJSONObject.Create(TJSONPair.Create('options', TJSONObject.Create(
     TJSONPair.Create('readOnly', TJSONObject.Create))));
   Request.SendRequest(nil, rmPOST, Data, nil, tmBearer,
-    BeginReadOnlyTransactionRespose, OnRequestError,
+    BeginReadOnlyTransactionResp, OnRequestError,
     TOnSuccess.CreateFirestoreTransaction(OnBeginTransaction));
 end;
 
-procedure TFirestoreDatabase.BeginReadOnlyTransactionRespose(
+procedure TFirestoreDatabase.BeginReadOnlyTransactionResp(
   const RequestID: string; Response: IFirebaseResponse);
 var
   Res: TJSONObject;
 begin
   try
+    fLastReceivedMsg := now;
     Response.CheckForJSONObj;
     Res := Response.GetContentAsJSONObj;
     try
@@ -653,7 +681,9 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirestoreDatabase.BeginReadOnlyTransactionResp', RequestID,
+           e.Message]);
     end;
   end;
 end;
@@ -672,6 +702,7 @@ begin
     TJSONPair.Create('readOnly', TJSONObject.Create))));
   try
     Response := Request.SendRequestSynchronous(nil, rmPOST, Data, nil);
+    fLastReceivedMsg := now;
     if Response.StatusOk then
     begin
       Res := Response.GetContentAsJSONObj;
@@ -706,9 +737,11 @@ begin
 end;
 
 procedure TFirestoreDatabase.StartListener(OnStopListening: TOnStopListenEvent;
-  OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent);
+  OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent;
+  OnConnectionStateChange: TOnConnectionStateChange);
 begin
-  fListener.RegisterEvents(OnStopListening, OnError, OnAuthRevoked);
+  fListener.RegisterEvents(OnStopListening, OnError, OnAuthRevoked,
+    OnConnectionStateChange);
   fListener.Start;
 end;
 
@@ -716,8 +749,15 @@ procedure TFirestoreDatabase.StopListener;
 begin
   fListener.StopListener;
   // Recreate thread because a thread cannot be restarted
-//  fListener.Free;
   fListener := TListenerThread.Create(fProjectID, fDatabaseID, fAuth);
+end;
+
+function TFirestoreDatabase.GetTimeStampOfLastAccess: TDateTime;
+begin
+  if fLastReceivedMsg > fListener.LastReceivedMsg then
+    result := fLastReceivedMsg
+  else
+    result := fListener.LastReceivedMsg;
 end;
 {$ENDREGION}
 
@@ -807,7 +847,7 @@ begin
     StructQuery.AddPair('limit', TJSONNumber.Create(fLimit));
   fQuery.AddPair('structuredQuery', StructQuery);
 {$IFDEF DEBUG}
-  TFirebaseHelpers.Log(' StructuredQuery: ' + fQuery.ToJSON);
+  TFirebaseHelpers.Log('StructuredQuery ' + fQuery.ToJSON);
 {$ENDIF}
   result := fQuery;
 end;
@@ -1023,9 +1063,6 @@ end;
 function TQueryFilter.AsJSON: TJSONObject;
 begin
   result := fFilter;
-{$IFDEF DEBUG}
-  TFirebaseHelpers.Log('  Filter: ' + result.ToJSON);
-{$ENDIF}
 end;
 
 function TQueryFilter.GetInfo: string;

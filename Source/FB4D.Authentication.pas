@@ -52,6 +52,7 @@ type
       fExpiresAt: TDateTime;
       fRefreshToken: string;
       fTokenRefreshCount: cardinal;
+      fOnTokenRefresh: TOnTokenRefresh;
     function SignWithEmailAndPasswordSynchronous(SignType: TSignType;
       const Email: string = ''; const Password: string = ''): IFirebaseUser;
     procedure SignWithEmailAndPassword(SignType: TSignType; const Info: string;
@@ -145,6 +146,8 @@ type
       OnTokenRefresh: TOnTokenRefresh; OnError: TOnRequestError); overload;
     function CheckAndRefreshTokenSynchronous(
       IgnoreExpiryCheck: boolean = false): boolean;
+    // register call back in all circumstances when the token will be refreshed
+    procedure InstallTokenRefreshNotification(OnTokenRefresh: TOnTokenRefresh);
     // Getter methods
     function Authenticated: boolean;
     function Token: string;
@@ -251,6 +254,7 @@ begin
   fApiKey := ApiKey;
   fCSForToken := TCriticalSection.Create;
   fTokenRefreshCount := 1; // begin with 1 and use 0 as sentinel
+  fOnTokenRefresh := nil;
 end;
 
 destructor TFirebaseAuthentication.Destroy;
@@ -364,6 +368,8 @@ begin
     finally
       fCSForToken.Release;
     end;
+    if assigned(fOnTokenRefresh) then
+      fOnTokenRefresh(not fRefreshToken.IsEmpty);
     result := User;
   finally
     Response := nil;
@@ -387,6 +393,8 @@ begin
   finally
     fCSForToken.Release;
   end;
+  if assigned(fOnTokenRefresh) then
+    fOnTokenRefresh(false);
 end;
 
 procedure TFirebaseAuthentication.SendEmailVerification(OnResponse: TOnFirebaseResp;
@@ -478,6 +486,8 @@ begin
     end;
     if assigned(Response.OnSuccess.OnUserResponse) then
       Response.OnSuccess.OnUserResponse(RequestID, User);
+    if assigned(fOnTokenRefresh) then
+      fOnTokenRefresh(not fRefreshToken.IsEmpty);
   except
     on e: EFirebaseResponse do
     begin
@@ -489,14 +499,16 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, ErrMsg)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, ErrMsg]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirebaseAuthentication.OnUserResp', RequestID, ErrMsg]);
     end;
     on e: Exception do
     begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log(Format(rsFBFailureIn, [RequestID, e.Message]));
+        TFirebaseHelpers.LogFmt(rsFBFailureIn,
+          ['FirebaseAuthentication.OnUserResp', RequestID, e.Message]);
     end;
   end;
 end;
@@ -577,6 +589,8 @@ begin
     finally
       fCSForToken.Release;
     end;
+    if assigned(fOnTokenRefresh) then
+      fOnTokenRefresh(not fRefreshToken.IsEmpty);
     result := User;
   finally
     Response := nil;
@@ -756,14 +770,15 @@ begin
     Params.Add('key', [ApiKey]);
     Response := Request.SendRequestSynchronous(['accounts:update'], rmPost, Data,
       Params, tmNoToken);
+    {$IFDEF DEBUG}
+    TFirebaseHelpers.Log('FirebaseAuthentication.DeleteProvidersSynchronous ' +
+      Response.ContentAsString);
+    {$ENDIF}
     if Response.StatusOk then
     begin
       Response.CheckForJSONObj;
       result := true;
     end;
-    {$IFDEF DEBUG}
-    TFirebaseHelpers.Log(Response.ContentAsString);
-    {$ENDIF}
   finally
     Response := nil;
     Params.Free;
@@ -898,7 +913,8 @@ begin
     else if assigned(Response.OnError) then
       Response.OnError(RequestID, Response.ErrorMsg)
     else
-      TFirebaseHelpers.Log('Verify password failed: ' + Response.ErrorMsg);
+      TFirebaseHelpers.Log('FirebaseAuthentication.OnVerifyPassword failed: ' +
+        Response.ErrorMsg);
   end;
 end;
 
@@ -1041,8 +1057,8 @@ begin
     if not Response.StatusOk then
       Response.CheckForJSONObj;
     {$IFDEF DEBUG}
-    TFirebaseHelpers.Log(Format(rsChangeProfile, [Info.CommaText]));
-    TFirebaseHelpers.Log(Response.ContentAsString);
+    TFirebaseHelpers.Log('FirebaseAuthentication.ChangeProfileSynchronous ' +
+      Info.CommaText);
     {$ENDIF}
   finally
     Info.Free;
@@ -1100,7 +1116,9 @@ begin
     Response.CheckForJSONObj;
     result := TFirebaseUser.Create(Response.GetContentAsJSONObj);
     {$IFDEF DEBUG}
-    TFirebaseHelpers.Log(Response.ContentAsString);
+    TFirebaseHelpers.Log(
+      'FirebaseAuthentication.LinkWithEMailAndPasswordSynchronous' +
+      Response.ContentAsString);
     {$ENDIF}
   finally
     Response := nil;
@@ -1128,7 +1146,8 @@ begin
     if not Response.StatusOk then
       Response.CheckForJSONObj;
     {$IFDEF DEBUG}
-    TFirebaseHelpers.Log(Response.ContentAsString);
+    TFirebaseHelpers.Log('FirebaseAuthentication.DeleteCurrentUserSynchronous ' +
+      Response.ContentAsString);
     {$ENDIF}
   finally
     Response := nil;
@@ -1255,7 +1274,8 @@ begin
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log('Firebase GetAccountInfo failed: ' + e.Message);
+        TFirebaseHelpers.Log('FirebaseAuthentication.OnUserList failed: ' +
+          e.Message);
   end;
 end;
 
@@ -1281,6 +1301,8 @@ begin
     Params.Free;
     Data.Free;
   end;
+  if assigned(fOnTokenRefresh) then
+    fOnTokenRefresh(not fRefreshToken.IsEmpty);
 end;
 
 procedure TFirebaseAuthentication.RefreshToken(const LastRefreshToken: string;
@@ -1288,6 +1310,12 @@ procedure TFirebaseAuthentication.RefreshToken(const LastRefreshToken: string;
 begin
   fRefreshToken := LastRefreshToken;
   RefreshToken(OnTokenRefresh, OnError);
+end;
+
+procedure TFirebaseAuthentication.InstallTokenRefreshNotification(
+  OnTokenRefresh: TOnTokenRefresh);
+begin
+  fOnTokenRefresh := OnTokenRefresh;
 end;
 
 procedure TFirebaseAuthentication.CheckAndRefreshTokenResp(const RequestID: string;
@@ -1320,12 +1348,15 @@ begin
       fCSForToken.Release;
       NewToken.Free;
     end;
+    if assigned(fOnTokenRefresh) then
+      fOnTokenRefresh(not fRefreshToken.IsEmpty);
   except
     on e: exception do
       if assigned(Response.OnError) then
         Response.OnError(RequestID, e.Message)
       else
-        TFirebaseHelpers.Log('Firebase RefreshToken failed: ' + e.Message);
+        TFirebaseHelpers.Log(
+          'FirebaseAuthentication.CheckAndRefreshToken failed: ' + e.Message);
   end;
 end;
 
@@ -1342,15 +1373,12 @@ begin
   if not NeedTokenRefresh then
   begin
     {$IFDEF DEBUG}
-    TFirebaseHelpers.Log(
-      'CheckAndRefreshTokenSynchronous failed because token not yet (' +
-      TimeToStr(now) + ') expired: ' + TimeToStr(fExpiresAt));
+    TFirebaseHelpers.LogFmt(
+      'FirebaseAuthentication.CheckAndRefreshTokenSynchronous failed because ' +
+      'token not yet (%s) expired: %s', [TimeToStr(now), TimeToStr(fExpiresAt)]);
     {$ENDIF}
     if not IgnoreExpiryCheck then
-      exit(false)
-    else
-      TFirebaseHelpers.Log(
-        'CheckAndRefreshTokenSynchronous failed ignored!!!');
+      exit(false);
   end;
   result := false;
   fAuthenticated := false;
@@ -1385,6 +1413,8 @@ begin
     finally
       fCSForToken.Release;
       NewToken.Free;
+      if assigned(fOnTokenRefresh) then
+        fOnTokenRefresh(not fRefreshToken.IsEmpty);
     end;
   finally
     Response := nil;

@@ -94,11 +94,11 @@ type
       Response: IFirebaseResponse);
     procedure OnChangedProfile(const RequestID: string;
       Response: IFirebaseResponse);
-    procedure OnProfileImgUpload(const RequestIDorObjectName: string;
-      Obj: IStorageObject);
+    procedure OnProfileImgUpload(Obj: IStorageObject);
     procedure OnProfileImgError(const RequestID, ErrMsg: string);
     procedure StartDownloadProfileImg(PhotoURL: string);
     procedure OnProfileDownload(const DownloadURL: string);
+    function GetProfileImg: TBitmap;
   public
     constructor Create(AOwner: TComponent); override;
     destructor Destroy; override;
@@ -116,8 +116,10 @@ type
       const StoragePath: string = cDefaultStoragePathForProfileImg;
       ProfileImgSize: integer = cDefaultProfileImgSize);
     procedure StartEMailEntering;
+    procedure InformDelayedStart(const Msg: string);
+    procedure StopDelayedStart;
     function GetEMail: string;
-    property ProfileImg: TBitmap read fProfileImg;
+    property ProfileImg: TBitmap read GetProfileImg;
     property ProfileURL: string read fProfileURL;
   end;
 
@@ -476,6 +478,14 @@ begin
   result := trim(edtEmail.Text);
 end;
 
+function TFraSelfRegistration.GetProfileImg: TBitmap;
+begin
+  if assigned(fProfileImg) then
+    result := fProfileImg
+  else
+    result := fDefaultProfileImg;
+end;
+
 procedure TFraSelfRegistration.OnVerificationMailSent(const RequestID: string;
   Response: IFirebaseResponse);
 begin
@@ -566,8 +576,7 @@ begin
   end;
 end;
 
-procedure TFraSelfRegistration.OnProfileImgUpload(
-  const RequestIDorObjectName: string; Obj: IStorageObject);
+procedure TFraSelfRegistration.OnProfileImgUpload(Obj: IStorageObject);
 begin
   FreeAndNil(fProfileLoadStream);
   fProfileURL := Obj.DownloadUrl;
@@ -610,6 +619,30 @@ begin
   AniIndicator.Visible := false;
   lblStatus.Text := Format(rsProfileLoadErr, [ErrMsg]);
   FreeAndNil(fProfileLoadStream);
+end;
+
+procedure TFraSelfRegistration.InformDelayedStart(const Msg: string);
+begin
+  edtDisplayName.Visible := false;
+  btnRegisterDisplayName.Visible := false;
+  shpProfile.Visible := false;
+  AniIndicator.Visible := true;
+  AniIndicator.Enabled := true;
+  lblStatus.visible := true;
+  lblStatus.Text := Msg;
+  {$IFDEF DEBUG}
+  TFirebaseHelpers.Log('FraSelfRegistration.InformDelayedStart: ' + Msg);
+  {$ENDIF}
+end;
+
+procedure TFraSelfRegistration.StopDelayedStart;
+begin
+  AniIndicator.Visible := false;
+  AniIndicator.Enabled := false;
+  lblStatus.Text := '';
+  {$IFDEF DEBUG}
+  TFirebaseHelpers.Log('FraSelfRegistration.StopDelayedStart');
+  {$ENDIF}
 end;
 
 end.
