@@ -42,7 +42,7 @@ type
     fProjectID: string;
     fDatabaseID: string;
     fAuth: IFirebaseAuthentication;
-    fListener: TListenerThread;
+    fListener: TFSListenerThread;
     fLastReceivedMsg: TDateTime;
     function BaseURI: string;
     procedure OnQueryResponse(const RequestID: string;
@@ -107,11 +107,13 @@ type
       OnDeletedDoc: TOnDeletedDocument): cardinal;
     function SubscribeQuery(Query: IStructuredQuery;
       OnChangedDoc: TOnChangedDocument;
-      OnDeletedDoc: TOnDeletedDocument): cardinal;
+      OnDeletedDoc: TOnDeletedDocument;
+      DocPath: TRequestResourceParam = []): cardinal;
     procedure Unsubscribe(TargetID: cardinal);
     procedure StartListener(OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
-      OnConnectionStateChange: TOnConnectionStateChange = nil);
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
+      DoNotSynchronizeEvents: boolean = false);
     procedure StopListener;
     function GetTimeStampOfLastAccess: TDateTime;
     // Transaction
@@ -220,14 +222,17 @@ begin
   fProjectID := ProjectID;
   fAuth := Auth;
   fDatabaseID := DatabaseID;
-  fListener := TListenerThread.Create(ProjectID, DatabaseID, Auth);
+  fListener := TFSListenerThread.Create(ProjectID, DatabaseID, Auth);
   fLastReceivedMsg := 0;
 end;
 
 destructor TFirestoreDatabase.Destroy;
 begin
- if fListener.IsRunning then
-    fListener.StopListener;
+  if fListener.IsRunning then
+    fListener.StopListener
+  else
+    fListener.StopNotStarted;
+  fListener.Free;
   inherited;
 end;
 
@@ -726,9 +731,10 @@ begin
 end;
 
 function TFirestoreDatabase.SubscribeQuery(Query: IStructuredQuery;
-  OnChangedDoc: TOnChangedDocument; OnDeletedDoc: TOnDeletedDocument): cardinal;
+  OnChangedDoc: TOnChangedDocument; OnDeletedDoc: TOnDeletedDocument;
+  DocPath: TRequestResourceParam): cardinal;
 begin
-  result := fListener.SubscribeQuery(Query, OnChangedDoc, OnDeletedDoc);
+  result := fListener.SubscribeQuery(Query, DocPath, OnChangedDoc, OnDeletedDoc);
 end;
 
 procedure TFirestoreDatabase.Unsubscribe(TargetID: cardinal);
@@ -738,18 +744,20 @@ end;
 
 procedure TFirestoreDatabase.StartListener(OnStopListening: TOnStopListenEvent;
   OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent;
-  OnConnectionStateChange: TOnConnectionStateChange);
+  OnConnectionStateChange: TOnConnectionStateChange;
+  DoNotSynchronizeEvents: boolean);
 begin
   fListener.RegisterEvents(OnStopListening, OnError, OnAuthRevoked,
-    OnConnectionStateChange);
+    OnConnectionStateChange, DoNotSynchronizeEvents);
   fListener.Start;
 end;
 
 procedure TFirestoreDatabase.StopListener;
 begin
   fListener.StopListener;
+  fListener.Free;
   // Recreate thread because a thread cannot be restarted
-  fListener := TListenerThread.Create(fProjectID, fDatabaseID, fAuth);
+  fListener := TFSListenerThread.Create(fProjectID, fDatabaseID, fAuth);
 end;
 
 function TFirestoreDatabase.GetTimeStampOfLastAccess: TDateTime;

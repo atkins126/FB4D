@@ -56,10 +56,10 @@ uses
 constructor TTokenJWT.Create(const OAuthToken: string);
 var
   CompactToken: TJOSEBytes;
-
 begin
   CompactToken.AsString := OAuthToken;
   fContext := TJOSEContext.Create(CompactToken, TJWTClaims);
+  CompactToken.Clear;
 end;
 
 destructor TTokenJWT.Destroy;
@@ -115,7 +115,7 @@ var
 begin
   jws := fContext.GetJOSEObject<TJWS>;
   PublicKey := GetPublicKey(GetHeader.JSON.GetValue('kid').Value);
-  jws.SetKey(PublicKey);
+  jws.SetKeyFromCert(PublicKey);
   result := jws.VerifySignature;
 end;
 

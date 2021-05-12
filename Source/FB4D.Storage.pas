@@ -38,19 +38,20 @@ type
       FileName: string;
       MD5Hash: string;
       LastUpdate: TDateTime;
-      FileSize: longint;
-      constructor AddToCache(const aFileName: string; FSize: longint = 0);
+      FileSize: Int64;
+      constructor AddToCache(const aFileName: string; FSize: Int64 = 0);
     end;
   private
     fBucket: string;
     fAuth: IFirebaseAuthentication;
     fStorageObjs: TDictionary<TObjectName, IStorageObject>;
     fCacheFolder: string;
-    fMaxCacheSpaceInBytes: longint;
-    fCacheSpaceInBytes: longint;
+    fMaxCacheSpaceInBytes: Int64;
+    fCacheSpaceInBytes: Int64;
     fCacheContent: TList<TCacheFile>;
     fScanSync: TCriticalSection;
-    fScanFinished: boolean;
+    fScanFinished: TDateTime;
+    fLastUpdateRemovedFromCache: TDateTime;
     function BaseURL: string;
     procedure OnGetResponse(const ObjectName: TObjectName;
       Response: IFirebaseResponse);
@@ -92,11 +93,12 @@ type
 
     // Long-term storage (beyond the runtime of the app) of loaded storage files
     procedure SetupCacheFolder(const FolderName: string;
-      MaxCacheSpaceInBytes: longint = cDefaultCacheSpaceInBytes);
+      MaxCacheSpaceInBytes: Int64 = cDefaultCacheSpaceInBytes);
     function IsCacheInUse: boolean;
     function IsCacheScanFinished: boolean;
     procedure ClearCache;
     function CacheUsageInPercent: extended;
+    function IsCacheOverflowed: boolean;
   end;
 
   TStorageObject = class(TInterfacedObject, IStorageObject)
@@ -220,19 +222,23 @@ end;
 procedure TFirebaseStorage.OnGetResponse(const ObjectName: TObjectName;
   Response: IFirebaseResponse);
 var
-  StorageObj: IStorageObject;
+  StorageObj: TStorageObject;
 begin
   try
     Response.CheckForJSONObj;
-    StorageObJ := TStorageObject.Create(self, Response);
+    StorageObj := TStorageObject.Create(self, Response);
     fStorageObjs.TryAdd(ObjectName, StorageObJ);
-    if assigned(Response.OnSuccess.OnStorage) then
-      Response.OnSuccess.OnStorage(StorageObj)
-    else if assigned(Response.OnSuccess.OnStorageDeprecated) then
-      Response.OnSuccess.OnStorageDeprecated(ObjectName, StorageObj)
-    else
-      TFirebaseHelpers.Log('FirebaseStorage.OnGetResponse ' +
-        Response.ContentAsString);
+    case Response.OnSuccess.OnSuccessCase of
+      oscStorage:
+        if assigned(Response.OnSuccess.OnStorage) then
+         Response.OnSuccess.OnStorage(StorageObj);
+      oscStorageDeprecated:
+        if assigned(Response.OnSuccess.OnStorageDeprecated) then
+          Response.OnSuccess.OnStorageDeprecated(ObjectName, StorageObj);
+      else
+        TFirebaseHelpers.Log('FirebaseStorage.OnGetResponse ' +
+          Response.ContentAsString);
+    end;
   except
     on e: Exception do
     begin
@@ -460,8 +466,10 @@ end;
 
 {$REGION 'Cache Handling'}
 procedure TFirebaseStorage.SetupCacheFolder(const FolderName: string;
-  MaxCacheSpaceInBytes: longint);
+  MaxCacheSpaceInBytes: Int64);
 begin
+  Assert(MaxCacheSpaceInBytes > 0, 'Invalid max cache space');
+  Assert(not FolderName.IsEmpty, 'Empty cache folder not allowed');
   fCacheFolder := IncludeTrailingPathDelimiter(FolderName);
   fMaxCacheSpaceInBytes := MaxCacheSpaceInBytes;
   if not TDirectory.Exists(fCacheFolder) then
@@ -488,9 +496,6 @@ end;
 
 procedure TFirebaseStorage.ScanCacheFolder;
 begin
-  fScanSync.Acquire;
-  fScanFinished := false;
-  fCacheSpaceInBytes := 0;
   {$IFDEF DEBUG}
   TFirebaseHelpers.Log('FirebaseStorage.ScanCacheFolder start ' + fCacheFolder);
   {$ENDIF}
@@ -503,7 +508,10 @@ begin
       {$IFNDEF LINUX64}
       TThread.NameThreadForDebugging('StorageObject.ScanCacheFolder');
       {$ENDIF}
+      fScanSync.Acquire;
       try
+        fScanFinished := 0;
+        fCacheSpaceInBytes := 0;
         for FileName in TDirectory.GetFiles(fCacheFolder) do
         begin
           CacheFile := TCacheFile.AddToCache(FileName);
@@ -521,7 +529,7 @@ begin
           'FirebaseStorage.ScanCacheFolder finished, cache size %dB (%4.2f%%)',
           [fCacheSpaceInBytes, CacheUsageInPercent]);
         {$ENDIF}
-        fScanFinished := true;
+        fScanFinished := now;
         fScanSync.Release;
       except
         on e: exception do
@@ -533,12 +541,17 @@ end;
 
 function TFirebaseStorage.IsCacheScanFinished: boolean;
 begin
-  result := fScanFinished;
+  result := fScanFinished > 0;
 end;
 
 function TFirebaseStorage.IsCacheInUse: boolean;
 begin
   result := not fCacheFolder.IsEmpty and (fMaxCacheSpaceInBytes > 0);
+end;
+
+function TFirebaseStorage.IsCacheOverflowed: boolean;
+begin
+  result := fLastUpdateRemovedFromCache > fScanFinished;
 end;
 
 procedure TFirebaseStorage.AddToCache(StorageObj: IStorageObject;
@@ -547,7 +560,7 @@ var
   FileName: string;
   CacheFile: TCacheFile;
   FileStream: TFileStream;
-  FSize: longint;
+  FSize: Int64;
 begin
   if IsCacheInUse then
   begin
@@ -555,7 +568,7 @@ begin
     FileStream := TFileStream.Create(FileName, fmCreate);
     try
       Stream.Position := 0;
-      FileStream.CopyFrom(Stream);
+      FileStream.CopyFrom(Stream, Stream.Size);
       FSize := Stream.Size;
     finally
       FileStream.Free;
@@ -601,7 +614,7 @@ begin
             FileStream := TFileStream.Create(FileName,
               fmShareDenyNone or fmOpenRead);
             try
-              Stream.CopyFrom(FileStream);
+              Stream.CopyFrom(FileStream, Stream.Size);
             finally
               FileStream.Free;
             end;
@@ -654,7 +667,9 @@ const
 var
   CacheFile: TCacheFile;
   Usage: extended;
+  {$IFDEF DEBUG}
   Count: integer;
+  {$ENDIF}
 begin
   fScanSync.Acquire;
   try
@@ -668,16 +683,22 @@ begin
         else
           result := 1;
       end));
+    {$IFDEF DEBUG}
     Count := 0;
+    {$ENDIF}
     repeat
-      CacheFile := fCacheContent.Items[Count];
-      if TFirebaseHelpers.AppIsTerminated and
+      CacheFile := fCacheContent.Items[0];
+      fLastUpdateRemovedFromCache := CacheFile.LastUpdate;
+      if TFirebaseHelpers.AppIsTerminated or
          not DeleteFileFromCache(CacheFile.FileName) then
         exit
-      else
+      else begin
+        {$IFDEF DEBUG}
         inc(Count);
+        {$ENDIF}
+      end;
       Usage := CacheUsageInPercent;
-    until (Usage < cMaxUsageAfterClean) or (Count >= fCacheContent.Count);
+    until (Usage < cMaxUsageAfterClean) or (fCacheContent.Count = 0);
   finally
     fScanSync.Release;
   end;
@@ -746,20 +767,24 @@ var
   Client: THTTPClient;
   Response: IHTTPResponse;
 begin
-  Client := THTTPClient.Create;
-  try
-    Response := Client.Get(DownloadUrl, Stream);
-    if Response.StatusCode <> 200 then
-    begin
-      {$IFDEF DEBUG}
-      TFirebaseHelpers.Log('StorageObject.DownloadToStreamSynchronous ' +
-        Response.ContentAsString);
-      {$ENDIF}
-      raise EStorageObject.CreateFmt('Download failed: %s',
-        [Response.StatusText]);
+  if not fFirebaseStorage.CheckInCache(self, Stream) then
+  begin
+    Client := THTTPClient.Create;
+    try
+      Response := Client.Get(DownloadUrl, Stream);
+      if Response.StatusCode = 200 then
+        fFirebaseStorage.AddToCache(self, Stream)
+      else begin
+        {$IFDEF DEBUG}
+        TFirebaseHelpers.Log('StorageObject.DownloadToStreamSynchronous ' +
+          Response.ContentAsString);
+        {$ENDIF}
+        raise EStorageObject.CreateFmt('Download failed: %s',
+          [Response.StatusText]);
+      end;
+    finally
+      Client.Free;
     end;
-  finally
-    Client.Free;
   end;
 end;
 
@@ -832,13 +857,14 @@ begin
           on e: exception do
             begin
               ErrMsg := e.Message;
-              if assigned(OnError) then
+              if assigned(OnError) and not TFirebaseHelpers.AppIsTerminated then
                 TThread.Queue(nil,
                   procedure
                   begin
                     OnError(self, ErrMsg);
                   end)
-              else if assigned(OnAlternativeError) then
+              else if assigned(OnAlternativeError) and
+                not TFirebaseHelpers.AppIsTerminated then
                 TThread.Queue(nil,
                   procedure
                   begin
@@ -969,12 +995,12 @@ end;
 { TFirebaseStorage.TCacheFile }
 
 constructor TFirebaseStorage.TCacheFile.AddToCache(const aFileName: string;
-  FSize: longint);
+  FSize: Int64);
 begin
   FileName := aFileName;
   MD5Hash := TNetEncoding.Base64.EncodeBytesToString(
     THashMD5.GetHashBytesFromFile(FileName));
-  LastUpdate := TFile.GetLastWriteTimeUtc(FileName);
+  LastUpdate := TFile.GetLastWriteTime(FileName);
   if FSize > 0 then
     FileSize := FSize
   else

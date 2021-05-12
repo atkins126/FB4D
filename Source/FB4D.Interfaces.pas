@@ -102,7 +102,7 @@ type
     object;
 
   TOnSuccess = record
-    type TOnSucccessCase = (oscUndef, oscFB, oscUser, oscFetchProvider,
+    type TOnSuccessCase = (oscUndef, oscFB, oscUser, oscFetchProvider,
       oscPwdVerification, oscGetUserData, oscRefreshToken, oscRTDBValue,
       oscRTDBDelete, oscRTDBServerVariable, oscDocument, oscDocuments,
       oscBeginTransaction, oscStorage, oscStorageDeprecated, oscStorageUpload,
@@ -130,7 +130,7 @@ type
     constructor CreateDelStorage(OnDelStorageResp: TOnDeleteStorage);
     constructor CreateFunctionSuccess(OnFunctionSuccessResp: TOnFunctionSuccess);
     {$IFNDEF AUTOREFCOUNT}
-    case OnSuccessCase: TOnSucccessCase of
+    case OnSuccessCase: TOnSuccessCase of
       oscFB: (OnResponse: TOnFirebaseResp);
       oscUser: (OnUserResponse: TOnUserResponse);
       oscFetchProvider: (OnFetchProviders: TOnFetchProviders);
@@ -156,7 +156,7 @@ type
       oscFunctionSuccess: (OnFunctionSuccess: TOnFunctionSuccess);
     {$ELSE}
     var
-      OnSucccessCase: TOnSucccessCase;
+      OnSuccessCase: TOnSuccessCase;
       OnResponse: TOnFirebaseResp;
       OnUserResponse: TOnUserResponse;
       OnFetchProviders: TOnFetchProviders;
@@ -232,9 +232,11 @@ type
   end;
 
   IFirebaseEvent = interface(IInterface)
-    procedure StopListening(const NodeName: string = '';
-      MaxTimeOutInMS: cardinal = 500);
+    procedure StopListening(MaxTimeOutInMS: cardinal = 500); overload;
+    procedure StopListening(const NodeName: string;
+      MaxTimeOutInMS: cardinal = 500); overload; deprecated;
     function GetResourceParams: TRequestResourceParam;
+    function GetLastReceivedMsg: TDateTime;
     function IsStopped: boolean;
   end;
 
@@ -244,6 +246,7 @@ type
   TOnStopListenEvent = TNotifyEvent;
   TOnAuthRevokedEvent = procedure(TokenRenewPassed: boolean) of object;
   TOnConnectionStateChange = procedure(ListenerConnected: boolean) of object;
+  ERTDBListener = class(Exception);
 
   IRealTimeDB = interface(IInterface)
     procedure Get(ResourceParams: TRequestResourceParam;
@@ -281,8 +284,8 @@ type
     function ListenForValueEvents(ResourceParams: TRequestResourceParam;
       ListenEvent: TOnReceiveEvent; OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
       DoNotSynchronizeEvents: boolean = false): IFirebaseEvent;
-    function GetLastKeepAliveTimeStamp: TDateTime;
     // To retrieve server variables like timestamp and future variables
     procedure GetServerVariables(const ServerVarName: string;
       ResourceParams: TRequestResourceParam;
@@ -438,11 +441,13 @@ type
       OnDeletedDoc: TOnDeletedDocument): cardinal;
     function SubscribeQuery(Query: IStructuredQuery;
       OnChangedDoc: TOnChangedDocument;
-      OnDeletedDoc: TOnDeletedDocument): cardinal;
+      OnDeletedDoc: TOnDeletedDocument;
+      DocPath: TRequestResourceParam = []): cardinal;
     procedure Unsubscribe(TargetID: cardinal);
     procedure StartListener(OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
-      OnConnectionStateChange: TOnConnectionStateChange = nil);
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
+      DoNotSynchronizeEvents: boolean = false);
     procedure StopListener;
     function GetTimeStampOfLastAccess: TDateTime;
     // Transaction
@@ -686,11 +691,12 @@ type
 
     // Long-term storage (beyond the runtime of the app) of loaded storage files
     procedure SetupCacheFolder(const FolderName: string;
-      MaxCacheSpaceInBytes: longint = cDefaultCacheSpaceInBytes);
+      MaxCacheSpaceInBytes: Int64 = cDefaultCacheSpaceInBytes);
     function IsCacheInUse: boolean;
     function IsCacheScanFinished: boolean;
     procedure ClearCache;
     function CacheUsageInPercent: extended;
+    function IsCacheOverflowed: boolean;
   end;
 
   /// <summary>
