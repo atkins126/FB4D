@@ -41,6 +41,7 @@ uses
 
 const
   cDefaultCacheSpaceInBytes = 536870912; // 500 MByte
+  cDefaultDatabaseID = '(default)';
 
 type
   /// <summary>
@@ -342,6 +343,9 @@ type
     function GetMapType(const FieldName: string;
       Index: integer): TFirestoreFieldType;
     function GetMapValue(const FieldName: string; Index: integer): TJSONValue;
+      overload;
+    function GetMapValue(const FieldName, SubFieldName: string): TJSONObject;
+      overload;
     function GetMapValues(const FieldName: string): TJSONObjects;
     function AddOrUpdateField(Field: TJSONPair): IFirestoreDocument; overload;
     function AddOrUpdateField(const FieldName: string;
@@ -714,7 +718,8 @@ type
     function ProjectID: string;
     function Auth: IFirebaseAuthentication;
     function RealTimeDB: IRealTimeDB;
-    function Database: IFirestoreDatabase;
+    function Database(
+      const DatabaseID: string = cDefaultDatabaseID): IFirestoreDatabase;
     function Storage: IFirebaseStorage;
     function Functions: IFirebaseFunctions;
   end;

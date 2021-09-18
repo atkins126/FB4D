@@ -156,7 +156,7 @@ begin
   fAuth := Auth;
   fDatabase := 'projects/' + ProjectID + '/databases/' + DatabaseID;
   fTargets := TList<TTarget>.Create;
-  {$IFDEF WINDOWS}
+  {$IFDEF MSWINDOWS}
   EventName := 'FB4DFSListenerGetFini';
   {$ELSE}
   EventName := '';
@@ -173,6 +173,7 @@ destructor TFSListenerThread.Destroy;
 begin
   FreeAndNil(fGetFinishedEvent);
   FreeAndNil(fTargets);
+  FreeAndNil(fStream);
   inherited;
 end;
 
@@ -917,6 +918,8 @@ procedure TFSListenerThread.OnEndListenerGet(const ASyncResult: IAsyncResult);
 var
   Resp: IHTTPResponse;
 begin
+  if TFirebaseHelpers.AppIsTerminated then
+    exit;
   try
     if not assigned(fClient) then
     begin
@@ -1052,6 +1055,8 @@ var
   StreamReadFailed: boolean;
   len: Int64;
 begin
+  if TFirebaseHelpers.AppIsTerminated then
+    exit;
   try
     fLastReceivedMsg := Now;
     len := ReadCount - fReadPos;

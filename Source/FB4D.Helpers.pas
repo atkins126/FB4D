@@ -37,8 +37,10 @@ type
   TOnSimpleDownloadError = procedure(const DownloadURL, ErrMsg: string) of
     object;
   TOnSimpleDownloadSuccess = procedure(const DownloadURL: string) of object;
+  TOnLog = procedure(const Text: string) of object;
 
   TFirebaseHelpers = class
+    class var OnLog: TOnLog;
     // Time conversion functions
     class function CodeRFC3339DateTime(DateTimeStamp: TDateTime): string;
     class function ConvertTimeStampToUTCDateTime(TimeStamp: Int64): TDateTime;
@@ -68,7 +70,8 @@ type
     class function ConvertFBIDtoGUID(const FBID: string): TGuid;
     class function ConvertTimeStampAndRandomPatternToPUSHID(timestamp: TDateTime;
       Random: TBytes): string;
-    class function DecodeTimeStampFromPUSHID(const PUSHID: string): TDateTime;
+    class function DecodeTimeStampFromPUSHID(const PUSHID: string;
+      ConvertToLocalTime: boolean = true): TDateTime;
 
     // File helpers
     class procedure SimpleDownload(const DownloadUrl: string; Stream: TStream;
@@ -178,10 +181,12 @@ implementation
 
 uses
   System.Character,
-{$IF Declared(VCL)}
+{$IFDEF MSWINDOWS}
   WinAPI.Windows,
+{$ENDIF}
+{$IF Defined(VCL)}
   VCL.Forms,
-{$ELSEIF Declared(FMX)}
+{$ELSEIF Defined(FMX)}
   FMX.Types,
   FMX.Forms,
 {$ELSE}
@@ -341,18 +346,22 @@ class procedure TFirebaseHelpers.Log(msg: string);
 begin
   if AppIsTerminated then
     exit;
-{$IF Declared(FMX)}
+{$IF Defined(FMX)}
   {$IFDEF LINUX}
   writeln(msg);  // Workaround for RSP-32303
   {$ELSE}
   FMX.Types.Log.d(msg, []);
   // there is a bug in DE 10.2 when the wrong method is calling?
   {$ENDIF}
-{$ELSEIF Declared(VCL)}
+{$ELSEIF Defined(VCL)}
+  OutputDebugString(PChar(msg));
+{$ELSEIF Defined(MSWINDOWS)}
   OutputDebugString(PChar(msg));
 {$ELSE}
   writeln(msg);
 {$ENDIF}
+  if Assigned(OnLog) then
+    OnLog(msg);
 end;
 
 class procedure TFirebaseHelpers.LogFmt(msg: string; const Args: array of const);
@@ -373,7 +382,7 @@ end;
 
 class function TFirebaseHelpers.AppIsTerminated: boolean;
 begin
-{$IF Declared(VCL) OR Declared(FMX)}
+{$IF Defined(VCL) OR Defined(FMX)}
   result := Application.Terminated;
 {$ELSE}
   result := false;
@@ -382,7 +391,7 @@ end;
 
 class procedure TFirebaseHelpers.SleepAndMessageLoop(SleepInMs: cardinal);
 begin
-{$IF Declared(VCL) OR Declared(FMX)}
+{$IF Defined(VCL) OR Defined(FMX)}
   Application.ProcessMessages;
 {$ENDIF}
   Sleep(SleepInMs);
@@ -546,16 +555,18 @@ begin
 end;
 
 class function TFirebaseHelpers.DecodeTimeStampFromPUSHID(
-  const PUSHID: string): TDateTime;
+  const PUSHID: string; ConvertToLocalTime: boolean): TDateTime;
 var
   tsi: int64;
   c: integer;
 begin
   Assert(length(PUSHID) = 20, 'Invalid PUSHID length');
   tsi := 0;
-  for c := low(PUSHID) to low(PUSHID) + 8 do
+  for c := low(PUSHID) to low(PUSHID) + 7 do
     tsi := tsi shl 6 + pos(PUSHID[c], cPushID64) - low(cPushID64);
-  result := TTimeZone.Local.ToLocalTime(UnixToDateTime(tsi div 1000));
+  result := UnixToDateTime(tsi div 1000);
+  if ConvertToLocalTime then
+    result := TTimeZone.Local.ToLocalTime(result);
 end;
 
 class function TFirebaseHelpers.IsEMailAdress(const EMail: string): boolean;
