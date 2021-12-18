@@ -355,7 +355,7 @@ type
     property Fields[Index: integer]: TJSONObject read FieldValue;
   end;
 
-  IFirestoreDocuments = interface(IInterface)
+  IFirestoreDocuments = interface(IEnumerable<IFirestoreDocument>)
     function Count: integer;
     function Document(Ind: integer): IFirestoreDocument;
     function ServerTimeStamp(TimeZone: TTimeZone): TDateTime;
@@ -393,6 +393,12 @@ type
     function Offset(offset: integer): IStructuredQuery;
     function AsJSON: TJSONObject;
     function GetInfo: string;
+    function HasSelect: boolean;
+    function HasColSelector: boolean;
+    function HasFilter: boolean;
+    function HasOrder: boolean;
+    function HasStartAt: boolean;
+    function HasEndAt: boolean;
   end;
 
   TOnChangedDocument = procedure(ChangedDocument: IFirestoreDocument) of object;

@@ -219,6 +219,7 @@ type
     Label38: TLabel;
     edtParam4Val: TEdit;
     Label39: TLabel;
+    chbIncludeDescendants: TCheckBox;
     procedure btnLoginClick(Sender: TObject);
     procedure btnRefreshClick(Sender: TObject);
     procedure timRefreshTimer(Sender: TObject);
@@ -1121,7 +1122,7 @@ end;
 procedure TfmxFirebaseDemo.OnFirestoreGet(const Info: string;
   Docs: IFirestoreDocuments);
 var
-  c: integer;
+  Doc: IFirestoreDocument;
 begin
   memFirestore.Lines.Clear;
   try
@@ -1138,8 +1139,8 @@ begin
       chbUsePageToken.IsChecked := Docs.MorePagesToLoad;
       chbUsePageToken.Visible := chbUsePageToken.IsChecked;
       chbUsePageToken.TagString := Docs.PageToken;
-      for c := 0 to Docs.Count - 1 do
-        ShowDocument(Docs.Document(c));
+      for Doc in Docs do
+        ShowDocument(Doc);
     end else
       ShowDocument(nil);
   except
@@ -1235,7 +1236,7 @@ begin
            TJSONObject.SetBoolean('MapBool', false),
            TJSONObject.SetTimeStamp('MapTime', now + 1),
            TJSONObject.SetArray('MapSubArray', [TJSONObject.SetIntegerValue(1),
-               TJSONObject.SetIntegerValue(2)]), // Array in Map
+             TJSONObject.SetStringValue('Types other than in element[0]!')]), // Array in Map
            TJSONObject.SetMap('SubMap', [ // Map in Map
              TJSONObject.SetString('SubMapStr', 'SubText'),
              TJSONObject.SetDouble('SubMapReal', 3.1414),
@@ -1491,6 +1492,8 @@ begin
   if not chbUseChildDoc.IsChecked then
     fDatabase.RunQuery(
       TStructuredQuery.CreateForCollection(edtCollection.Text).
+// To fetch partial documents
+//        Select(['testInt']).
         QueryForFieldFilter(
           TQueryFilter.IntegerFieldFilter('testInt', woGreaterThan,
             trunc(trbMinTestInt.Value))).
@@ -1511,7 +1514,7 @@ begin
 //          TJSONObject.SetInteger('testInt', 61)), false).
 //        EndAt(TFirestoreDocument.CreateCursor.AddOrUpdateField(
 //          TJSONObject.SetInteger('testInt', 85)), false).
-        Limit(10).Offset(1),
+        Limit(10).Offset(0), // returns only the first 10 documents!
       OnFirestoreGet, OnFirestoreError, Query);
 end;
 
@@ -1550,13 +1553,14 @@ begin
   if not edtCollectionIDForFSListener.Text.IsEmpty then
   begin
     fDatabase.SubscribeQuery(TStructuredQuery.CreateForCollection(
-      edtCollectionIDForFSListener.Text), OnFSChangedDocInCollection,
-      OnFSDeletedDocCollection);
+      edtCollectionIDForFSListener.Text, chbIncludeDescendants.IsChecked),
+      OnFSChangedDocInCollection, OnFSDeletedDocCollection);
     Targets := 'Target-1: Collection ';
   end;
   if not edtDocPathForFSListener.Text.IsEmpty then
   begin
-    fDatabase.SubscribeDocument(edtDocPathForFSListener.Text.Split(['/']),
+    fDatabase.SubscribeDocument(
+      TFirebaseHelpers.FirestorePath(edtDocPathForFSListener.Text),
       OnFSChangedDoc, OnFSDeletedDoc);
     Targets := Targets + 'Target-2: Single Doc ';
   end;
@@ -1566,6 +1570,9 @@ begin
     fDatabase.StartListener(OnFSStopListening, OnFSRequestError, OnFSAuthRevoked);
     btnStartFSListener.Enabled := false;
     btnStopFSListener.Enabled := true;
+    edtCollectionIDForFSListener.Enabled := false;
+    edtDocPathForFSListener.Enabled := false;
+    chbIncludeDescendants.Enabled := false;
   end else
     memScanFS.Lines.Add('No target defined for starting listener');
 end;
@@ -1576,6 +1583,9 @@ begin
     exit;
   fDatabase.StopListener;
   btnStopFSListener.Enabled := false;
+  edtCollectionIDForFSListener.Enabled := true;
+  edtDocPathForFSListener.Enabled := true;
+  chbIncludeDescendants.Enabled := true;
 end;
 
 procedure TfmxFirebaseDemo.OnFSChangedDocInCollection(

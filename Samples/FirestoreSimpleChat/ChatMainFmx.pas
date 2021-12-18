@@ -32,6 +32,7 @@ uses
   FMX.Controls.Presentation, FMX.Edit, FMX.TabControl,FMX.ListView.Types,
   FMX.ListView.Appearances, FMX.ListView.Adapters.Base, FMX.Layouts,
   FMX.ListView, FMX.StdCtrls, FMX.MultiResBitmap, FMX.ImgList, FMX.TextLayout,
+  FMX.ListBox,
   FB4D.Interfaces, FB4D.Configuration, FB4D.SelfRegistrationFra;
 
 type
@@ -68,6 +69,7 @@ type
     txtWatchdog: TText;
     tmrTesting: TTimer;
     chbTesting: TCheckBox;
+    cboFilterMessages: TComboBox;
     procedure FormCreate(Sender: TObject);
     procedure btnSignOutClick(Sender: TObject);
     procedure btnPushMessageClick(Sender: TObject);
@@ -86,6 +88,7 @@ type
     procedure tmrWatchdogTimer(Sender: TObject);
     procedure chbTestingChange(Sender: TObject);
     procedure tmrTestingTimer(Sender: TObject);
+    procedure cboFilterMessagesChange(Sender: TObject);
   private type
     TPendingProfile = class
       Items: TList<TListViewItem>;
@@ -101,6 +104,7 @@ type
     fUserName: string;
     fMyImgIndex: integer;
     fEditDocID: string;
+    fLastCreated: TDateTime;
     fPendingProfiles: TDictionary<string {UID}, TPendingProfile>;
     fStressTestCounter: cardinal;
     function GetAuth: IFirebaseAuthentication;
@@ -111,6 +115,7 @@ type
     procedure OnTokenRefresh(TokenRefreshed: boolean);
     procedure OnUserLogin(const Info: string; User: IFirebaseUser);
     procedure StartChat;
+    procedure StartListener;
     procedure WipeToTab(ActiveTab: TTabItem);
     procedure EnterEditMode(const DocPath: string);
     procedure ExitEditMode(ClearEditBox: boolean);
@@ -150,7 +155,7 @@ uses
 {$R *.LgXhdpiPh.fmx ANDROID}
 
 const
-  cDocID = 'Chat';
+  cCollectionID = 'Chat';
 
 // Install the following Firestore Rule:
 // rules_version = '2';
@@ -326,21 +331,65 @@ begin
   FraSelfRegistration.StopDelayedStart;
   lblUserInfo.Text := fUserName + ' logged in';
   edtMessage.Text := '';
-  fConfig.Database.SubscribeQuery(TStructuredQuery.CreateForCollection(cDocID).
-    OrderBy('DateTime', odAscending),
-    OnChangedColDocument, OnDeletedColDocument);
-  fConfig.Database.StartListener(OnStopListening, OnListenerError,
-    OnAuthRevoked, OnConnectionStateChange);
   btnEditMessage.Visible := false;
   btnDeleteMessage.Visible := false;
   btnPushMessage.Visible := true;
   fEditDocID := '';
   fMyImgIndex := AddProfileImgToImageList(fUID, FraSelfRegistration.ProfileImg);
+  StartListener;
   {$IFDEF DEBUG}
   tmrWatchdog.Enabled := true;
   chbTesting.Visible := true;
   {$ENDIF}
   WipeToTab(tabChat);
+end;
+
+procedure TfmxChatMain.StartListener;
+
+  function ExtractIntInStr(const str: string): integer;
+  var  c: char;
+  begin
+    result := 0;
+    for c in str do
+      if CharInSet(c, ['0'..'9']) then
+        result := result * 10 + ord(c) - ord('0');
+  end;
+
+var
+  Query: IStructuredQuery;
+  FilterMsgs: string;
+begin
+  Assert(cboFilterMessages.ItemIndex >= 0, 'No filter is selected');
+  lsvChat.Items.Clear;
+  fLastCreated := 0;
+  FilterMsgs := cboFilterMessages.Items[cboFilterMessages.ItemIndex];
+  Query := TStructuredQuery.CreateForCollection(cCollectionID).
+    OrderBy('DateTime', odDescending);
+  if FilterMsgs.Contains('newest') then
+    Query.Limit(ExtractIntInStr(FilterMsgs))
+  else if FilterMsgs.Contains('week') then
+    Query.QueryForFieldFilter(
+      TQueryFilter.TimestampFieldFilter('DateTime',
+        TWhereOperator.woGreaterThan, now - 7))
+  else if FilterMsgs.Contains('month') then
+    Query.QueryForFieldFilter(
+      TQueryFilter.TimestampFieldFilter('DateTime',
+        TWhereOperator.woGreaterThan, now - 31))
+  else if FilterMsgs.Contains('year') then
+    Query.QueryForFieldFilter(
+      TQueryFilter.TimestampFieldFilter('DateTime',
+        TWhereOperator.woGreaterThan, now - 365));
+  fConfig.Database.SubscribeQuery(Query, OnChangedColDocument,
+    OnDeletedColDocument);
+  fConfig.Database.StartListener(OnStopListening, OnListenerError,
+    OnAuthRevoked, OnConnectionStateChange);
+end;
+
+procedure TfmxChatMain.cboFilterMessagesChange(Sender: TObject);
+begin
+  fConfig.Database.StopListener(true);
+  ExitEditMode(not fEditDocID.IsEmpty);
+  StartListener;
 end;
 
 function TfmxChatMain.SearchItem(const DocId: string): TListViewItem;
@@ -381,7 +430,7 @@ end;
 procedure TfmxChatMain.OnChangedColDocument(Document: IFirestoreDocument);
 var
   Item: TListViewItem;
-  Edited: TDateTime;
+  Created, Edited: TDateTime;
   UID: string;
   DetailInfo: string;
   ImgInd: integer;
@@ -390,16 +439,21 @@ begin
   Item := SearchItem(Document.DocumentName(true));
   lsvChat.BeginUpdate;
   try
+    Created := TFirebaseHelpers.ConvertToLocalDateTime(
+      Document.GetTimeStampValueDef('DateTime', now));
+    Edited := Document.GetTimeStampValueDef('Edited', 0);
     if not assigned(Item) then
     begin
-      Item := lsvChat.Items.AddItem(lsvChat.ItemCount);
+      if Created > fLastCreated then
+        Item := lsvChat.Items.AddItem(lsvChat.ItemCount) // add new item to bottom
+      else
+        Item := lsvChat.Items.AddItem(0); // While initial scan add all on top
+      fLastCreated := Created;
       Item.TagString := Document.DocumentName(true);
     end;
     Item.Text := Document.GetStringValueDef('Message', '?');
     DetailInfo := Document.GetStringValueDef('Sender', '?') + ' at ' +
-      DateTimeToStr(TFirebaseHelpers.ConvertToLocalDateTime(
-        Document.GetTimeStampValueDef('DateTime', now)));
-    Edited := Document.GetTimeStampValueDef('Edited', 0);
+      DateTimeToStr(Created);
     if Edited > 0 then
       DetailInfo := DetailInfo + ' (edited ' +
         DateTimeToStr(TFirebaseHelpers.ConvertToLocalDateTime(Edited)) + ')';
@@ -507,8 +561,9 @@ begin
   {$IFDEF DEBUG}
   TFirebaseHelpers.Log('Doc: ' + Doc.AsJSON.ToJSON);
   {$ENDIF}
-  fConfig.Database.InsertOrUpdateDocument([cDocID, Doc.DocumentName(false)],
-    Doc, nil, OnDocWrite, OnDocWriteError);
+  fConfig.Database.InsertOrUpdateDocument(
+    [cCollectionID, Doc.DocumentName(false)], Doc, nil,
+    OnDocWrite, OnDocWriteError);
   btnPushMessage.Enabled := false;
 end;
 
@@ -520,7 +575,7 @@ begin
   Doc := TFirestoreDocument.Create(fEditDocID);
   Doc.AddOrUpdateField(TJSONObject.SetString('Message', edtMessage.Text));
   Doc.AddOrUpdateField(TJSONObject.SetTimeStamp('Edited', now));
-  fConfig.Database.PatchDocument([cDocID, fEditDocID], Doc,
+  fConfig.Database.PatchDocument([cCollectionID, fEditDocID], Doc,
     ['Message', 'Edited'], OnDocWrite, OnDocWriteError);
   btnEditMessage.Enabled := false;
   btnDeleteMessage.Enabled := false;
@@ -529,7 +584,7 @@ end;
 procedure TfmxChatMain.btnDeleteMessageClick(Sender: TObject);
 begin
   Assert(not fEditDocID.IsEmpty, 'No doc ID to patch');
-  fConfig.Database.Delete([cDocID, fEditDocID], nil, OnDocDelete,
+  fConfig.Database.Delete([cCollectionID, fEditDocID], nil, OnDocDelete,
     OnDocDeleteError);
   btnEditMessage.Enabled := false;
   btnDeleteMessage.Enabled := false;
