@@ -62,6 +62,7 @@ type
     class function ArrStrToCommaStr(Arr: array of string): string;
     class function ArrStrToQuotedCommaStr(Arr: array of string): string;
     class function FirestorePath(const Path: string): TRequestResourceParam;
+      deprecated 'Use TFirestorePath.ConvertToDocPath instead';
     // FBID is based on charset of cBase64: Helpers and converter to GUID
     // PUSHID is based on charset of cPushID64: Supports chronological sorting
     type TIDKind = (FBID {random 22 Chars},
@@ -78,6 +79,8 @@ type
     class procedure SimpleDownload(const DownloadUrl: string; Stream: TStream;
       OnSuccess: TOnSimpleDownloadSuccess;
       OnError: TOnSimpleDownloadError = nil);
+    class procedure SimpleDownloadSynchronous(const DownloadUrl: string;
+      Stream: TStream);
     // Miscellaneous functions
     class function IsEMailAdress(const EMail: string): boolean;
     // Application helpers
@@ -98,6 +101,15 @@ type
     // This notification is used in the Realtime DB for Post and Push operation
   end;
 
+  TFirestorePath = class
+    class function TrimStartAndEndPathDelimiters(const Path: string): string;
+    class function ConvertToDocPath(const Path: string): TRequestResourceParam;
+    class function ContainsPathDelim(const Path: string): boolean;
+    class function ExtractLastCollection(const Path: string): string;
+    class function DocPathWithoutLastCollection(
+      const Path: string): TRequestResourceParam;
+  end;
+
   TJSONHelpers = class helper for TJSONObject
     // String
     function GetStringValue: string; overload;
@@ -107,8 +119,12 @@ type
     // Integer
     function GetIntegerValue: integer; overload;
     function GetIntegerValue(const Name: string): integer; overload;
+    function GetInt64Value: Int64; overload;
+    function GetInt64Value(const Name: string): Int64; overload;
     class function SetIntegerValue(Val: integer): TJSONObject;
     class function SetInteger(const VarName: string; Val: integer): TJSONPair;
+    class function SetInt64Value(Val: Int64): TJSONObject;
+    class function SetInt64(const VarName: string; Val: Int64): TJSONPair;
     // Boolean
     function GetBooleanValue: Boolean; overload;
     function GetBooleanValue(const Name: string): Boolean; overload;
@@ -141,27 +157,33 @@ type
     class function SetGeoPoint(const VarName: string;
       Val: TLocationCoord2D): TJSONPair;
     // Bytes
-    class function SetBytesValue(Val: TBytes): TJSONObject;
-    class function SetBytes(const VarName: string; Val: TBytes): TJSONPair;
     function GetBytes: TBytes; overload;
     function GetBytes(const Name: string): TBytes; overload;
-    class function SetMapValue(MapVars: array of TJSONPair): TJSONObject;
-    class function SetMap(const VarName: string;
-      MapVars: array of TJSONPair): TJSONPair;
+    class function SetBytesValue(Val: TBytes): TJSONObject;
+    class function SetBytes(const VarName: string; Val: TBytes): TJSONPair;
     // Map
     function GetMapSize: integer; overload;
     function GetMapSize(const Name: string): integer; overload;
     function GetMapItem(Ind: integer): TJSONPair; overload;
     function GetMapItem(const Name: string): TJSONObject; overload;
     function GetMapItem(const Name: string; Ind: integer): TJSONPair; overload;
+    class function SetMapValue(MapVars: array of TJSONPair): TJSONObject;
+    class function SetMap(const VarName: string;
+      MapVars: array of TJSONPair): TJSONPair;
     // Array
-    class function SetArray(const VarName: string;
-      ArrayVars: array of TJSONValue): TJSONPair;
     function GetArraySize: integer; overload;
     function GetArraySize(const Name: string): integer; overload;
     function GetArrayItem(Ind: integer): TJSONObject; overload;
     function GetArrayItem(const Name: string; Ind: integer): TJSONObject;
       overload;
+    class function SetArray(const VarName: string;
+      ArrayVars: array of TJSONValue): TJSONPair;
+    class function SetStringArray(const VarName: string;
+      Strings: TStringDynArray): TJSONPair; overload;
+    class function SetStringArray(const VarName: string;
+      Strings: TStringList): TJSONPair; overload;
+    class function SetStringArray(const VarName: string;
+      Strings: TList<string>): TJSONPair; overload;
   end;
 
   TQueryParamsHelper = class helper for TQueryParams
@@ -463,6 +485,27 @@ begin
     end).Start;
 end;
 
+class procedure TFirebaseHelpers.SimpleDownloadSynchronous(
+  const DownloadUrl: string; Stream: TStream);
+var
+  Client: THTTPClient;
+  Response: IHTTPResponse;
+begin
+  Client := THTTPClient.Create;
+  try
+    Response := Client.Get(DownloadUrl, Stream);
+    if Response.StatusCode <> 200 then
+    begin
+      {$IFDEF DEBUG}
+      TFirebaseHelpers.Log(Response.ContentAsString);
+      {$ENDIF}
+      raise EFirebaseResponse.Create(Response.StatusText);
+    end;
+  finally
+    Client.Free;
+  end;
+end;
+
 class function TFirebaseHelpers.CreateAutoID(IDKind: TIDKind = FBID): string;
 begin
   // use OS to generate a random number
@@ -488,25 +531,25 @@ var
 begin
   SetLength(result, 22);
   D1 := Guid.D1;
-  result[1] := GetBase64(D1);
+  result[1] := GetBase64(D1 and $FF);
   D1 := D1 shr 6;
-  result[2] := GetBase64(D1);
+  result[2] := GetBase64(D1 and $FF);
   D1 := D1 shr 6;
-  result[3] := GetBase64(D1);
+  result[3] := GetBase64(D1 and $FF);
   D1 := D1 shr 6;
-  result[4] := GetBase64(D1);
+  result[4] := GetBase64(D1 and $FF);
   D1 := D1 shr 6;
-  result[5] := GetBase64(D1);
+  result[5] := GetBase64(D1 and $FF);
   D2 := Guid.D2;
-  result[6] := GetBase64(D2);
+  result[6] := GetBase64(D2 and $FF);
   D2 := D2 shr 6;
-  result[7] := GetBase64(D2);
+  result[7] := GetBase64(D2 and $FF);
   D2 := D2 shr 6;
   result[8] := GetBase64(D2 and $F + (D1 and $C0) shr 2);
   D3 := Guid.D3;
-  result[9] := GetBase64(D3);
+  result[9] := GetBase64(D3 and $FF);
   D3 := D3 shr 6;
-  result[10] := GetBase64(D3);
+  result[10] := GetBase64(D3 and $FF);
   D3 := D3 shr 6;
   result[11] := GetBase64(D3 and $F + (Guid.D4[0] and $C0) shr 2);
   result[12] := GetBase64(Guid.D4[0]);
@@ -714,11 +757,72 @@ begin
   result := result + GetPlatform;
 end;
 
+{ TFirestorePath }
+
+class function TFirestorePath.ContainsPathDelim(const Path: string): boolean;
+begin
+  result := (pos('/', Path) >= 0) or (pos('\', Path) >= 0);
+end;
+
+class function TFirestorePath.TrimStartAndEndPathDelimiters(
+  const Path: string): string;
+begin
+  if Path.StartsWith('/') or Path.StartsWith('\') then
+  begin
+    if Path.EndsWith('/') or Path.EndsWith('\') then
+      result := Path.Substring(1, length(Path) - 2)
+    else
+      result := Path.Substring(1)
+  end
+  else if Path.EndsWith('/') or Path.EndsWith('\') then
+    result := Path.Substring(0, length(Path) - 1)
+  else
+    result := Path;
+end;
+
+class function TFirestorePath.ConvertToDocPath(
+  const Path: string): TRequestResourceParam;
+begin
+  result := TrimStartAndEndPathDelimiters(Path).Split(['/', '\']);
+end;
+
+class function TFirestorePath.ExtractLastCollection(const Path: string): string;
+var
+  TrimmedPath: string;
+  c: integer;
+begin
+  TrimmedPath := TrimStartAndEndPathDelimiters(Path);
+  c := TrimmedPath.LastDelimiter(['/', '\']);
+  if c < 0 then
+    result := TrimmedPath
+  else
+    result := TrimmedPath.Substring(c + 1);
+end;
+
+class function TFirestorePath.DocPathWithoutLastCollection(
+  const Path: string): TRequestResourceParam;
+var
+  TrimmedPath: string;
+  c: integer;
+begin
+  TrimmedPath := TrimStartAndEndPathDelimiters(Path);
+  c := TrimmedPath.LastDelimiter(['/', '\']);
+  if c < 0 then
+    result := []
+  else
+    result := ConvertToDocPath(TrimmedPath.Substring(0, c));
+end;
+
 { TJSONHelpers }
 
 function TJSONHelpers.GetIntegerValue: integer;
 begin
   result := GetValue<integer>('integerValue');
+end;
+
+function TJSONHelpers.GetInt64Value: Int64;
+begin
+  result := GetValue<Int64>('integerValue');
 end;
 
 function TJSONHelpers.GetIntegerValue(const Name: string): integer;
@@ -728,6 +832,17 @@ begin
   Val := GetValue(Name);
   if assigned(Val) then
     result := (Val as TJSONObject).GetIntegerValue
+  else
+    raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetInt64Value(const Name: string): Int64;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetInt64Value
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
@@ -831,6 +946,18 @@ class function TJSONHelpers.SetIntegerValue(Val: integer): TJSONObject;
 begin
   result := TJSONObject.Create(TJSONPair.Create('integerValue',
     TJSONNumber.Create(Val)));
+end;
+
+class function TJSONHelpers.SetInt64Value(Val: Int64): TJSONObject;
+begin
+  result := TJSONObject.Create(TJSONPair.Create('integerValue',
+    TJSONNumber.Create(Val)));
+end;
+
+class function TJSONHelpers.SetInt64(const VarName: string;
+  Val: Int64): TJSONPair;
+begin
+  result := TJSONPair.Create(VarName, SetInt64Value(Val));
 end;
 
 class function TJSONHelpers.SetInteger(const VarName: string;
@@ -1064,6 +1191,42 @@ class function TJSONHelpers.SetArray(const VarName: string;
 
 begin
   result := TJSONPair.Create(VarName, SetArrayValue(ArrayVars));
+end;
+
+class function TJSONHelpers.SetStringArray(const VarName: string;
+  Strings: TStringDynArray): TJSONPair;
+var
+  Arr: array of TJSONValue;
+  c: integer;
+begin
+  SetLength(Arr, length(Strings));
+  for c := 0 to length(Strings) - 1 do
+    Arr[c] := TJSONObject.SetStringValue(Strings[c]);
+  result := SetArray(VarName, Arr);
+end;
+
+class function TJSONHelpers.SetStringArray(const VarName: string;
+  Strings: TStringList): TJSONPair;
+var
+  Arr: array of TJSONValue;
+  c: integer;
+begin
+  SetLength(Arr, Strings.Count);
+  for c := 0 to Strings.Count - 1 do
+    Arr[c] := TJSONObject.SetStringValue(Strings[c]);
+  result := SetArray(VarName, Arr);
+end;
+
+class function TJSONHelpers.SetStringArray(const VarName: string;
+  Strings: TList<string>): TJSONPair;
+var
+  Arr: array of TJSONValue;
+  c: integer;
+begin
+  SetLength(Arr, Strings.Count);
+  for c := 0 to Strings.Count - 1 do
+    Arr[c] := TJSONObject.SetStringValue(Strings[c]);
+  result := SetArray(VarName, Arr);
 end;
 
 function TJSONHelpers.GetArraySize: integer;

@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -35,12 +35,14 @@ type
   TFirebaseFunctions = class(TInterfacedObject, IFirebaseFunctions)
   private
     fProjectID: string;
+    fServerRegion: string;
     fAuth: IFirebaseAuthentication;
     function BaseURL: string;
     procedure OnResp(const RequestID: string; Response: IFirebaseResponse);
   public
     constructor Create(const ProjectID: string;
-      Auth: IFirebaseAuthentication = nil);
+      Auth: IFirebaseAuthentication = nil;
+      const ServerRegion: string = cRegionUSCent1);
     procedure CallFunction(OnSuccess: TOnFunctionSuccess;
       OnRequestError: TOnRequestError; const FunctionName: string;
       Params: TJSONObject = nil);
@@ -54,7 +56,7 @@ uses
   FB4D.Helpers;
 
 const
-  GOOGLE_CLOUD_FUNCTIONS_URL = 'https://us-central1-%s.cloudfunctions.net';
+  GOOGLE_CLOUD_FUNCTIONS_URL = 'https://%s-%s.cloudfunctions.net';
 
 resourcestring
   rsFunctionCall = 'Function call %s';
@@ -63,16 +65,17 @@ resourcestring
 { TFirestoreFunctions }
 
 constructor TFirebaseFunctions.Create(const ProjectID: string;
-  Auth: IFirebaseAuthentication);
+  Auth: IFirebaseAuthentication; const ServerRegion: string);
 begin
   inherited Create;
   fProjectID := ProjectID;
   fAuth := Auth;
+  fServerRegion := ServerRegion;
 end;
 
 function TFirebaseFunctions.BaseURL: string;
 begin
-  result := Format(GOOGLE_CLOUD_FUNCTIONS_URL, [fProjectID]);
+  result := Format(GOOGLE_CLOUD_FUNCTIONS_URL, [fServerRegion, fProjectID]);
 end;
 
 procedure TFirebaseFunctions.CallFunction(OnSuccess: TOnFunctionSuccess;
