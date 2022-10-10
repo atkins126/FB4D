@@ -1,7 +1,7 @@
 ﻿{******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -120,7 +120,7 @@ end;
 
 procedure UT_FirestoreDB.WaitAndCheckTimeout(const Step: string);
 const
-  cTimeout = 10 / 24 / 3600; // 10 sec
+  cTimeout = 15 / 24 / 3600; // 15 sec
 begin
   Application.ProcessMessages;
   if now - fStarted > cTimeout then

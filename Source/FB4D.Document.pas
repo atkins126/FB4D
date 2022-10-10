@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -38,7 +38,6 @@ type
   TFirestoreDocument = class(TInterfacedObject, IFirestoreDocument)
   private
     fJSONObj: TJSONObject;
-    fJSONObjOwned: boolean;
     fCreated, fUpdated: TDateTime;
     fDocumentName: string;
     fFields: array of record
@@ -71,6 +70,9 @@ type
     function GetIntegerValue(const FieldName: string): integer;
     function GetIntegerValueDef(const FieldName: string;
       Default: integer): integer;
+    function GetInt64Value(const FieldName: string): Int64;
+    function GetInt64ValueDef(const FieldName: string;
+      Default: Int64): Int64;
     function GetDoubleValue(const FieldName: string): double;
     function GetDoubleValueDef(const FieldName: string;
       Default: double): double;
@@ -96,7 +98,7 @@ type
     function GetMapType(const FieldName: string;
       Index: integer): TFirestoreFieldType;
     function GetMapSubFieldName(const FieldName: string; Index: integer): string;
-    function GetMapValue(const FieldName: string; Index: integer): TJSONValue;
+    function GetMapValue(const FieldName: string; Index: integer): TJSONObject;
       overload;
     function GetMapValue(const FieldName, SubFieldName: string): TJSONObject;
       overload;
@@ -385,7 +387,6 @@ constructor TFirestoreDocument.Create(const Name: string);
 begin
   inherited Create;
   fDocumentName := Name;
-  fJSONObjOwned := true;
   fJSONObj := TJSONObject.Create;
   fJSONObj.AddPair('name', Name);
   SetLength(fFields, 0);
@@ -402,8 +403,7 @@ var
   c: integer;
 begin
   inherited Create;
-  fJSONObjOwned := false;
-  fJSONObj := JSONObj;
+  fJSONObj := JSONObj.Clone as TJSONObject;
   if fJSONObj.Count < 3 then
     raise EFirestoreDocument.Create(rsInvalidDocNodeCountLess3);
   if not fJSONObj.TryGetValue('name', fDocumentName) then
@@ -431,9 +431,15 @@ begin
 end;
 
 constructor TFirestoreDocument.CreateFromJSONObj(Response: IFirebaseResponse);
+var
+  JSONObj: TJSONObject;
 begin
-  CreateFromJSONObj(Response.GetContentAsJSONObj);
-  fJSONObjOwned := true;
+  JSONObj := Response.GetContentAsJSONObj;
+  try
+    CreateFromJSONObj(JSONObj);
+  finally
+    JSONObj.Free;
+  end;
 end;
 
 destructor TFirestoreDocument.Destroy;
@@ -443,8 +449,7 @@ begin
   for c := 0 to length(fFields) - 1 do
     FreeAndNil(fFields[c].Obj);
   SetLength(fFields, 0);
-  if fJSONObjOwned then
-    fJSONObj.Free;
+  fJSONObj.Free;
   inherited;
 end;
 
@@ -692,6 +697,29 @@ begin
   if not assigned(Val) then
     result := Default
   else if not Val.TryGetValue<integer>('integerValue', result) then
+    result := Default;
+end;
+
+function TFirestoreDocument.GetInt64Value(const FieldName: string): Int64;
+var
+  Val: TJSONValue;
+begin
+  Val := FieldByName(FieldName);
+  if assigned(Val) then
+    result := Val.GetValue<Int64>('integerValue')
+  else
+    raise EFirestoreDocument.CreateFmt(rsFieldNoFound, [FieldName]);
+end;
+
+function TFirestoreDocument.GetInt64ValueDef(const FieldName: string;
+  Default: Int64): Int64;
+var
+  Val: TJSONValue;
+begin
+  Val := FieldByName(FieldName);
+  if not assigned(Val) then
+    result := Default
+  else if not Val.TryGetValue<Int64>('integerValue', result) then
     result := Default;
 end;
 
@@ -1024,7 +1052,7 @@ begin
 end;
 
 function TFirestoreDocument.GetMapValue(const FieldName: string;
-  Index: integer): TJSONValue;
+  Index: integer): TJSONObject;
 var
   Objs: TJSONObjects;
 begin
@@ -1033,7 +1061,7 @@ begin
     raise EFirestoreDocument.CreateFmt(rsFieldNoFound, [FieldName]);
   if (Index < 0) or (Index >= length(Objs)) then
     raise EFirestoreDocument.Create(rsMapIndexOutOfBound);
-  result := Objs[Index].Pairs[0].JsonValue;
+  result := Objs[Index];
 end;
 
 function TFirestoreDocument.GetMapValue(const FieldName,

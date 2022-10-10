@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -44,7 +44,9 @@ uses
   FB4D.RealTimeDB in '..\..\Source\FB4D.RealTimeDB.pas',
   FB4D.FireStore.Listener in '..\..\Source\FB4D.FireStore.Listener.pas',
   FB4D.Configuration in '..\..\Source\FB4D.Configuration.pas',
-  FB4D.RealTimeDB.Listener in '..\..\Source\FB4D.RealTimeDB.Listener.pas';
+  FB4D.RealTimeDB.Listener in '..\..\Source\FB4D.RealTimeDB.Listener.pas',
+  FB4D.VisionMLDefinition in '..\..\Source\FB4D.VisionMLDefinition.pas',
+  FB4D.VisionML in '..\..\Source\FB4D.VisionML.pas';
 
 {$R *.res}
 

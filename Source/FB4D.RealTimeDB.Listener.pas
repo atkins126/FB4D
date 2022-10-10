@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -39,6 +39,9 @@ type
     cTimeoutConnectionLost = 61000;  // 1 minute and 1sec
     cDefTimeOutInMS = 500;
     cJSONExt = '.json';
+  private
+    class var FNoOfConcurrentThreads: integer;
+    class constructor ClassCreate;
   private
     fBaseURL: string;
     fURL: string;
@@ -95,22 +98,31 @@ resourcestring
 
 { TRTDBListenerThread }
 
+class constructor TRTDBListenerThread.ClassCreate;
+begin
+  FNoOfConcurrentThreads := 0;
+end;
+
 constructor TRTDBListenerThread.Create(const FirebaseURL: string;
   Auth: IFirebaseAuthentication);
 var
   EventName: string;
 begin
   inherited Create(true);
-  fBaseURL := FirebaseURL;
+  if FirebaseURL.EndsWith('/') then
+    fBaseURL := FirebaseURL.Substring(0, FirebaseURL.Length - 1)
+  else
+    fBaseURL := FirebaseURL;
   fAuth := Auth;
   {$IFDEF MSWINDOWS}
-  EventName := 'RTDBListenerGetFini';
+  EventName := 'RTDBListenerGetFini' + FNoOfConcurrentThreads.ToString;
   {$ELSE}
   EventName := '';
   {$ENDIF}
   fGetFinishedEvent := TEvent.Create(nil, false, false, EventName);
   OnTerminate := OnEndThread;
   FreeOnTerminate := false;
+  inc(FNoOfConcurrentThreads);
   {$IFNDEF LINUX64}
   NameThreadForDebugging('FB4D.RTListenerThread', ThreadID);
   {$ENDIF}

@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -43,6 +43,7 @@ type
     class var OnLog: TOnLog;
     // Time conversion functions
     class function CodeRFC3339DateTime(DateTimeStamp: TDateTime): string;
+    class function DecodeRFC3339DateTime(DateTimeStamp: string): TDateTime;
     class function ConvertTimeStampToUTCDateTime(TimeStamp: Int64): TDateTime;
     class function ConvertRFC5322ToUTCDateTime(DateTime: string): TDateTime;
     class function ConvertRFC5322ToLocalDateTime(DateTime: string): TDateTime;
@@ -91,6 +92,9 @@ type
     class function IsMainThread: boolean;
     class function GetConfigAndPlatform: string;
     class function GetPlatform: string;
+
+    // ML helpers
+    class function GetLanguageInEnglishFromCode(const Code: string): string;
   private const
     cBase64 =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
@@ -110,34 +114,47 @@ type
       const Path: string): TRequestResourceParam;
   end;
 
+  TFirestoreMap = array of TJSONPair;
+  TFirestoreArr = array of TJSONValue;
   TJSONHelpers = class helper for TJSONObject
     // String
     function GetStringValue: string; overload;
     function GetStringValue(const Name: string): string; overload;
+    function GetStringValueDef(const Name: string;
+      const Default: string = ''): string;
     class function SetStringValue(const Val: string): TJSONObject;
     class function SetString(const VarName, Val: string): TJSONPair;
     // Integer
     function GetIntegerValue: integer; overload;
     function GetIntegerValue(const Name: string): integer; overload;
+    function GetIntegerValueDef(const Name: string;
+      Default: integer = 0): integer;
     function GetInt64Value: Int64; overload;
     function GetInt64Value(const Name: string): Int64; overload;
+    function GetInt64ValueDef(const Name: string;
+      Default: Int64 = 0): Int64;
     class function SetIntegerValue(Val: integer): TJSONObject;
     class function SetInteger(const VarName: string; Val: integer): TJSONPair;
     class function SetInt64Value(Val: Int64): TJSONObject;
     class function SetInt64(const VarName: string; Val: Int64): TJSONPair;
     // Boolean
-    function GetBooleanValue: Boolean; overload;
-    function GetBooleanValue(const Name: string): Boolean; overload;
+    function GetBooleanValue: boolean; overload;
+    function GetBooleanValue(const Name: string): boolean; overload;
+    function GetBooleanValueDef(const Name: string;
+      Default: boolean = false): boolean;
     class function SetBooleanValue(Val: boolean): TJSONObject;
     class function SetBoolean(const VarName: string; Val: boolean): TJSONPair;
     // Double
     function GetDoubleValue: double; overload;
     function GetDoubleValue(const Name: string): double; overload;
+    function GetDoubleValueDef(const Name: string; Default: double = 0): double;
     class function SetDoubleValue(Val: double): TJSONObject;
     class function SetDouble(const VarName: string; Val: double): TJSONPair;
     // TimeStamp
-    function GetTimeStampValue(const Name: string): TDateTime; overload;
     function GetTimeStampValue: TDateTime; overload;
+    function GetTimeStampValue(const Name: string): TDateTime; overload;
+    function GetTimeStampValueDef(const Name: string;
+      Default: TDateTime = 0): TDateTime;
     class function SetTimeStampValue(Val: TDateTime): TJSONObject;
     class function SetTimeStamp(const VarName: string;
       Val: TDateTime): TJSONPair;
@@ -148,11 +165,15 @@ type
     // Reference
     function GetReference: string; overload;
     function GetReference(const Name: string): string; overload;
+    function GetReferenceDef(const Name: string;
+      const Default: string = ''): string;
     class function SetReferenceValue(const ProjectID, Ref: string): TJSONObject;
     class function SetReference(const Name, ProjectID, Ref: string): TJSONPair;
     // GeoPoint
     function GetGeoPoint: TLocationCoord2D; overload;
     function GetGeoPoint(const Name: string): TLocationCoord2D; overload;
+    function GetGeoPointDef(const Name: string;
+      Default: TLocationCoord2D): TLocationCoord2D;
     class function SetGeoPointValue(Val: TLocationCoord2D): TJSONObject;
     class function SetGeoPoint(const VarName: string;
       Val: TLocationCoord2D): TJSONPair;
@@ -167,17 +188,19 @@ type
     function GetMapItem(Ind: integer): TJSONPair; overload;
     function GetMapItem(const Name: string): TJSONObject; overload;
     function GetMapItem(const Name: string; Ind: integer): TJSONPair; overload;
-    class function SetMapValue(MapVars: array of TJSONPair): TJSONObject;
+    function GetMapValue(const Name: string; Ind: integer): TJSONObject;
+    class function SetMapValue(MapVars: TFirestoreMap): TJSONObject;
     class function SetMap(const VarName: string;
-      MapVars: array of TJSONPair): TJSONPair;
+      MapVars: TFirestoreMap): TJSONPair;
     // Array
     function GetArraySize: integer; overload;
     function GetArraySize(const Name: string): integer; overload;
     function GetArrayItem(Ind: integer): TJSONObject; overload;
     function GetArrayItem(const Name: string; Ind: integer): TJSONObject;
       overload;
+    function GetStringArray: TStringDynArray;
     class function SetArray(const VarName: string;
-      ArrayVars: array of TJSONValue): TJSONPair;
+      FSArr: TFirestoreArr): TJSONPair;
     class function SetStringArray(const VarName: string;
       Strings: TStringDynArray): TJSONPair; overload;
     class function SetStringArray(const VarName: string;
@@ -208,7 +231,8 @@ uses
 {$IFDEF MSWINDOWS}
   WinAPI.Windows,
 {$ENDIF}
-{$IF Defined(VCL)}
+{$IF Defined(CONSOLE)}
+{$ELSEIF Defined(VCL)}
   VCL.Forms,
 {$ELSEIF Defined(FMX)}
   FMX.Types,
@@ -238,6 +262,12 @@ begin
   // Format RFC3339
   result := FormatDateTime('yyyy-mm-dd', UTC) + 'T' +
     FormatDateTime('hh:mm:ss', UTC) + 'Z';
+end;
+
+class function TFirebaseHelpers.DecodeRFC3339DateTime(
+  DateTimeStamp: string): TDateTime;
+begin
+  result := ISO8601ToDate(DateTimeStamp, false); // To local time
 end;
 
 class function TFirebaseHelpers.ConvertRFC5322ToLocalDateTime(
@@ -390,7 +420,7 @@ begin
   OutputDebugString(PChar(msg));
 {$ELSEIF Defined(MSWINDOWS)}
   OutputDebugString(PChar(msg));
-{$ELSE}
+{$ELSEIF Defined(CONSOLE)}
   writeln(msg);
 {$ENDIF}
   if Assigned(OnLog) then
@@ -757,6 +787,263 @@ begin
   result := result + GetPlatform;
 end;
 
+class function TFirebaseHelpers.GetLanguageInEnglishFromCode(
+  const Code: string): string;
+begin
+  if SameText(Code, 'af') then
+    result := 'Afrikaans'
+  else if SameText(Code, 'am') then
+    result := 'Amharic'
+  else if SameText(Code, 'ar') then
+    result := 'Arabic'
+  else if SameText(Code, 'arn') then
+    result := 'Mapudungun'
+  else if SameText(Code, 'as') then
+    result := 'Assamese'
+  else if SameText(Code, 'az') then
+    result := 'Azeri'
+  else if SameText(Code, 'ba') then
+    result := 'Bashkir'
+  else if SameText(Code, 'be') then
+    result := 'Belarusian'
+  else if SameText(Code, 'bg') then
+    result := 'Bulgarian'
+  else if SameText(Code, 'bn') then
+    result := 'Bengali'
+  else if SameText(Code, 'bo') then
+    result := 'Tibetan'
+  else if SameText(Code, 'br') then
+    result := 'Breton'
+  else if SameText(Code, 'bs') then
+    result := 'Bosnian'
+  else if SameText(Code, 'ca') then
+    result := 'Catalan'
+  else if SameText(Code, 'co') then
+    result := 'Corsican'
+  else if SameText(Code, 'cs') then
+    result := 'Czech'
+  else if SameText(Code, 'cy') then
+    result := 'Welsh'
+  else if SameText(Code, 'da') then
+    result := 'Danish'
+  else if SameText(Code, 'de') then
+    result := 'German'
+  else if SameText(Code, 'dsb') then
+    result := 'Lower Sorbian'
+  else if SameText(Code, 'dv') then
+    result := 'Divehi'
+  else if SameText(Code, 'el') then
+    result := 'Greek'
+  else if SameText(Code, 'en') then
+    result := 'English'
+  else if SameText(Code, 'es') then
+    result := 'Spanish'
+  else if SameText(Code, 'et') then
+    result := 'Estonian'
+  else if SameText(Code, 'eu') then
+    result := 'Basque'
+  else if SameText(Code, 'fa') then
+    result := 'Persian'
+  else if SameText(Code, 'fi') then
+    result := 'Finnish'
+  else if SameText(Code, 'fil') then
+    result := 'Filipino'
+  else if SameText(Code, 'fo') then
+    result := 'Faroese'
+  else if SameText(Code, 'fr') then
+    result := 'French'
+  else if SameText(Code, 'fy') then
+    result := 'Frisian'
+  else if SameText(Code, 'ga') then
+    result := 'Irish'
+  else if SameText(Code, 'gd') then
+    result := 'Scottish Gaelic'
+  else if SameText(Code, 'gl') then
+    result := 'Galician'
+  else if SameText(Code, 'gsw') then
+    result := 'Alsatian'
+  else if SameText(Code, 'gu') then
+    result := 'Gujarati'
+  else if SameText(Code, 'ha') then
+    result := 'Hausa'
+  else if SameText(Code, 'he') then
+    result := 'Hebrew'
+  else if SameText(Code, 'hi') then
+    result := 'Hindi'
+  else if SameText(Code, 'hr') then
+    result := 'Croatian'
+  else if SameText(Code, 'hsb') then
+    result := 'Upper Sorbian'
+  else if SameText(Code, 'hu') then
+    result := 'Hungarian'
+  else if SameText(Code, 'hy') then
+    result := 'Armenian'
+  else if SameText(Code, 'id') then
+    result := 'Indonesian'
+  else if SameText(Code, 'ig') then
+    result := 'Igbo'
+  else if SameText(Code, 'ii') then
+    result := 'Yi'
+  else if SameText(Code, 'is') then
+    result := 'Icelandic'
+  else if SameText(Code, 'it') then
+    result := 'Italian'
+  else if SameText(Code, 'iu') then
+    result := 'Inuktitut'
+  else if SameText(Code, 'ja') then
+    result := 'Japanese'
+  else if SameText(Code, 'ka') then
+    result := 'Georgian'
+  else if SameText(Code, 'kk') then
+    result := 'Kazakh'
+  else if SameText(Code, 'kl') then
+    result := 'Greenlandic'
+  else if SameText(Code, 'km') then
+    result := 'Khmer'
+  else if SameText(Code, 'kn') then
+    result := 'Kannada'
+  else if SameText(Code, 'ko') then
+    result := 'Korean'
+  else if SameText(Code, 'kok') then
+    result := 'Konkani'
+  else if SameText(Code, 'ky') then
+    result := 'Kyrgyz'
+  else if SameText(Code, 'lb') then
+    result := 'Luxembourgish'
+  else if SameText(Code, 'lo') then
+    result := 'Lao'
+  else if SameText(Code, 'lt') then
+    result := 'Lithuanian'
+  else if SameText(Code, 'lv') then
+    result := 'Latvian'
+  else if SameText(Code, 'mi') then
+    result := 'Maori'
+  else if SameText(Code, 'mk') then
+    result := 'Macedonian'
+  else if SameText(Code, 'ml') then
+    result := 'Malayalam'
+  else if SameText(Code, 'mn') then
+    result := 'Mongolian'
+  else if SameText(Code, 'moh') then
+    result := 'Mohawk'
+  else if SameText(Code, 'mr') then
+    result := 'Marathi'
+  else if SameText(Code, 'ms') then
+    result := 'Malay'
+  else if SameText(Code, 'mt') then
+    result := 'Maltese'
+  else if SameText(Code, 'my') then
+    result := 'Burmese'
+  else if SameText(Code, 'nb') then
+    result := 'Norwegian (Bokmål)'
+  else if SameText(Code, 'ne') then
+    result := 'Nepali'
+  else if SameText(Code, 'nl') then
+    result := 'Dutch'
+  else if SameText(Code, 'nn') then
+    result := 'Norwegian (Nynorsk)'
+  else if SameText(Code, 'no') then
+    result := 'Norwegian'
+  else if SameText(Code, 'nso') then
+    result := 'Sesotho'
+  else if SameText(Code, 'oc') then
+    result := 'Occitan'
+  else if SameText(Code, 'or') then
+    result := 'Oriya'
+  else if SameText(Code, 'pa') then
+    result := 'Punjabi'
+  else if SameText(Code, 'pl') then
+    result := 'Polish'
+  else if SameText(Code, 'prs') then
+    result := 'Dari'
+  else if SameText(Code, 'ps') then
+    result := 'Pashto'
+  else if SameText(Code, 'pt') then
+    result := 'Portuguese'
+  else if SameText(Code, 'quc') then
+    result := 'K''iche'
+  else if SameText(Code, 'quz') then
+    result := 'Quechua'
+  else if SameText(Code, 'rm') then
+    result := 'Romansh'
+  else if SameText(Code, 'ro') then
+    result := 'Romanian'
+  else if SameText(Code, 'ru') then
+    result := 'Russian'
+  else if SameText(Code, 'rw') then
+    result := 'Kinyarwanda'
+  else if SameText(Code, 'sa') then
+    result := 'Sanskrit'
+  else if SameText(Code, 'sah') then
+    result := 'Yakut'
+  else if SameText(Code, 'se') then
+    result := 'Sami (Northern)'
+  else if SameText(Code, 'si') then
+    result := 'Sinhala'
+  else if SameText(Code, 'sk') then
+    result := 'Slovak'
+  else if SameText(Code, 'sl') then
+    result := 'Slovenian'
+  else if SameText(Code, 'sma') then
+    result := 'Sami (Southern)'
+  else if SameText(Code, 'smj') then
+    result := 'Sami (Lule)'
+  else if SameText(Code, 'smn') then
+    result := 'Sami (Inari)'
+  else if SameText(Code, 'sms') then
+    result := 'Sami (Skolt)'
+  else if SameText(Code, 'sq') then
+    result := 'Albanian'
+  else if SameText(Code, 'sr') then
+    result := 'Serbian'
+  else if SameText(Code, 'sv') then
+    result := 'Swedish'
+  else if SameText(Code, 'sw') then
+    result := 'Kiswahili'
+  else if SameText(Code, 'syr') then
+    result := 'Syriac'
+  else if SameText(Code, 'ta') then
+    result := 'Tamil'
+  else if SameText(Code, 'te') then
+    result := 'Telugu'
+  else if SameText(Code, 'tg') then
+    result := 'Tajik'
+  else if SameText(Code, 'th') then
+    result := 'Thai'
+  else if SameText(Code, 'tk') then
+    result := 'Turkmen'
+  else if SameText(Code, 'tn') then
+    result := 'Setswana'
+  else if SameText(Code, 'tr') then
+    result := 'Turkish'
+  else if SameText(Code, 'tt') then
+    result := 'Tatar'
+  else if SameText(Code, 'tzm') then
+    result := 'Tamazight'
+  else if SameText(Code, 'ug') then
+    result := 'Uyghur'
+  else if SameText(Code, 'uk') then
+    result := 'Ukrainian'
+  else if SameText(Code, 'ur') then
+    result := 'Urdu'
+  else if SameText(Code, 'uz') then
+    result := 'Uzbek'
+  else if SameText(Code, 'vi') then
+    result := 'Vietnamese'
+  else if SameText(Code, 'wo') then
+    result := 'Wolof'
+  else if SameText(Code, 'xh') then
+    result := 'isiXhosa'
+  else if SameText(Code, 'yo') then
+    result := 'Yoruba'
+  else if SameText(Code, 'zh') then
+    result := 'Chinese'
+  else if SameText(Code, 'zu') then
+    result := 'isiZulu'
+  else
+    result := Code + '?';
+end;
+
 { TFirestorePath }
 
 class function TFirestorePath.ContainsPathDelim(const Path: string): boolean;
@@ -836,6 +1123,18 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
+function TJSONHelpers.GetIntegerValueDef(const Name: string;
+  Default: integer): integer;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetIntegerValue
+  else
+    result := Default;
+end;
+
 function TJSONHelpers.GetInt64Value(const Name: string): Int64;
 var
   Val: TJSONValue;
@@ -845,6 +1144,18 @@ begin
     result := (Val as TJSONObject).GetInt64Value
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetInt64ValueDef(const Name: string;
+  Default: Int64): Int64;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetInt64Value
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetStringValue: string;
@@ -863,12 +1174,23 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
-function TJSONHelpers.GetBooleanValue: Boolean;
+function TJSONHelpers.GetStringValueDef(const Name, Default: string): string;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetStringValue
+  else
+    result := Default;
+end;
+
+function TJSONHelpers.GetBooleanValue: boolean;
 begin
   result := GetValue<boolean>('booleanValue');
 end;
 
-function TJSONHelpers.GetBooleanValue(const Name: string): Boolean;
+function TJSONHelpers.GetBooleanValue(const Name: string): boolean;
 var
   Val: TJSONValue;
 begin
@@ -877,6 +1199,18 @@ begin
     result := (Val as TJSONObject).GetBooleanValue
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetBooleanValueDef(const Name: string;
+  Default: boolean): boolean;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetBooleanValue
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetDoubleValue: double;
@@ -895,6 +1229,18 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
+function TJSONHelpers.GetDoubleValueDef(const Name: string;
+  Default: double): double;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetDoubleValue
+  else
+    result := Default;
+end;
+
 function TJSONHelpers.GetTimeStampValue: TDateTime;
 begin
   result := GetValue<TDateTime>('timestampValue');
@@ -909,6 +1255,18 @@ begin
     result := (Val as TJSONObject).GetTimeStampValue
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetTimeStampValueDef(const Name: string;
+  Default: TDateTime): TDateTime;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetTimeStampValue
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetGeoPoint: TLocationCoord2D;
@@ -929,6 +1287,18 @@ begin
     result := (Val as TJSONObject).GetGeoPoint
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetGeoPointDef(const Name: string;
+  Default: TLocationCoord2D): TLocationCoord2D;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetGeoPoint
+  else
+    result := Default;
 end;
 
 class function TJSONHelpers.SetStringValue(const Val: string): TJSONObject;
@@ -1033,6 +1403,17 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
+function TJSONHelpers.GetReferenceDef(const Name, Default: string): string;
+var
+  Val: TJSONValue;
+begin
+  Val := GetValue(Name);
+  if assigned(Val) then
+    result := (Val as TJSONObject).GetReference
+  else
+    result := Default;
+end;
+
 class function TJSONHelpers.SetReferenceValue(const ProjectID,
   Ref: string): TJSONObject;
 
@@ -1113,10 +1494,9 @@ var
 begin
   Val := GetValue(Name);
   if assigned(Val) then
-  begin
     result := (Val as TJSONObject).GetMapSize
-  end else
-    raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+  else
+    result := 0;
 end;
 
 function TJSONHelpers.GetMapItem(Ind: integer): TJSONPair;
@@ -1134,29 +1514,31 @@ var
   Obj: TJSONObject;
   Ind: integer;
 begin
+  result := nil;
   Obj := GetValue<TJSONObject>('mapValue').GetValue<TJSONObject>('fields');
   if assigned(Obj) then
     for Ind := 0 to Obj.Count - 1 do
       if SameText(Obj.Pairs[Ind].JsonString.Value, Name) then
         exit(Obj.Pairs[Ind].JsonValue as TJSONObject);
-  raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
-
 
 function TJSONHelpers.GetMapItem(const Name: string; Ind: integer): TJSONPair;
 var
   Val: TJSONValue;
 begin
+  result := nil;
   Val := GetValue(Name);
   if assigned(Val) then
-  begin
     result := (Val as TJSONObject).GetMapItem(Ind)
-  end else
-    raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
-class function TJSONHelpers.SetMapValue(
-  MapVars: array of TJSONPair): TJSONObject;
+function TJSONHelpers.GetMapValue(const Name: string;
+  Ind: integer): TJSONObject;
+begin
+  result := GetMapItem(Name, Ind).JsonValue as TJSONObject;
+end;
+
+class function TJSONHelpers.SetMapValue(MapVars: TFirestoreMap): TJSONObject;
 var
   Map: TJSONObject;
   c: integer;
@@ -1169,34 +1551,34 @@ begin
 end;
 
 class function TJSONHelpers.SetMap(const VarName: string;
-  MapVars: array of TJSONPair): TJSONPair;
+  MapVars: TFirestoreMap): TJSONPair;
 begin
   result := TJSONPair.Create(VarName, SetMapValue(MapVars));
 end;
 
 class function TJSONHelpers.SetArray(const VarName: string;
-  ArrayVars: array of TJSONValue): TJSONPair;
+  FSArr: TFirestoreArr): TJSONPair;
 
-  function SetArrayValue(ArrayVars: array of TJSONValue): TJSONObject;
+  function SetArrayValue(FSArr: TFirestoreArr): TJSONObject;
   var
     Arr: TJSONArray;
     c: integer;
   begin
     Arr := TJSONArray.Create;
-    for c := 0 to length(ArrayVars) - 1 do
-      Arr.AddElement(ArrayVars[c]);
+    for c := 0 to length(FSArr) - 1 do
+      Arr.AddElement(FSArr[c]);
     result := TJSONObject.Create(TJSONPair.Create('arrayValue',
       TJSONObject.Create(TJSONPair.Create('values', Arr))));
   end;
 
 begin
-  result := TJSONPair.Create(VarName, SetArrayValue(ArrayVars));
+  result := TJSONPair.Create(VarName, SetArrayValue(FSArr));
 end;
 
 class function TJSONHelpers.SetStringArray(const VarName: string;
   Strings: TStringDynArray): TJSONPair;
 var
-  Arr: array of TJSONValue;
+  Arr: TFirestoreArr;
   c: integer;
 begin
   SetLength(Arr, length(Strings));
@@ -1208,7 +1590,7 @@ end;
 class function TJSONHelpers.SetStringArray(const VarName: string;
   Strings: TStringList): TJSONPair;
 var
-  Arr: array of TJSONValue;
+  Arr: TFirestoreArr;
   c: integer;
 begin
   SetLength(Arr, Strings.Count);
@@ -1220,7 +1602,7 @@ end;
 class function TJSONHelpers.SetStringArray(const VarName: string;
   Strings: TList<string>): TJSONPair;
 var
-  Arr: array of TJSONValue;
+  Arr: TFirestoreArr;
   c: integer;
 begin
   SetLength(Arr, Strings.Count);
@@ -1246,10 +1628,9 @@ var
 begin
   Val := GetValue(Name);
   if assigned(Val) then
-  begin
     result := (Val as TJSONObject).GetArraySize
-  end else
-    raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+  else
+    result := 0;
 end;
 
 function TJSONHelpers.GetArrayItem(Ind: integer): TJSONObject;
@@ -1278,6 +1659,17 @@ begin
     result := (Val as TJSONObject).GetArrayItem(Ind)
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetStringArray: TStringDynArray;
+var
+  Arr: TJSONArray;
+  c: integer;
+begin
+  Arr := GetValue<TJSONObject>('arrayValue').GetValue<TJSONArray>('values');
+  SetLength(result, Arr.Count);
+  for c := 0 to Arr.Count - 1 do
+    result[c] := (Arr.Items[0] as TJSONObject).GetStringValue;
 end;
 
 { TQueryParamsHelper }

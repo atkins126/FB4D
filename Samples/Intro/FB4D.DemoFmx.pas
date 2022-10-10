@@ -1,7 +1,7 @@
 ﻿{******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2021 Christoph Schneider                                 }
+{  Copyright (c) 2018-2022 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -220,6 +220,42 @@ type
     edtParam4Val: TEdit;
     Label39: TLabel;
     chbIncludeDescendants: TCheckBox;
+    btnStart2ndListener: TButton;
+    btnStopEvent2: TButton;
+    edtRTDBEvent2Path: TEdit;
+    tabVisionML: TTabItem;
+    btnVisionMLAnotateStorage: TButton;
+    memVisionML: TMemo;
+    edtRefStorage: TEdit;
+    memAnnotateFile: TMemo;
+    OpenDialogFileAnnotate: TOpenDialog;
+    bntLoadML: TButton;
+    edtAnotateFileType: TEdit;
+    btnVisionMLAnotateFile: TButton;
+    lstFeatures: TListBox;
+    lbiFaceDetection: TListBoxItem;
+    lbiTextDetection: TListBoxItem;
+    lbiLandmarkDetection: TListBoxItem;
+    lbiLabelDetection: TListBoxItem;
+    lbiLogoDetection: TListBoxItem;
+    lbiImageProp: TListBoxItem;
+    lbiWebDetection: TListBoxItem;
+    lbiObjectLocalization: TListBoxItem;
+    lbiProductSearch: TListBoxItem;
+    lbiSafeSearch: TListBoxItem;
+    lbiDocTextDetection: TListBoxItem;
+    rdbResAsJSON: TRadioButton;
+    rdbResAsText: TRadioButton;
+    gpbMLResult: TGroupBox;
+    Label40: TLabel;
+    gpbMLModel: TGroupBox;
+    rdbLatestModel: TRadioButton;
+    rdbStableModel: TRadioButton;
+    rdbUnsetModel: TRadioButton;
+    gpbMaxResultSet: TGroupBox;
+    spbMaxFeatures: TSpinBox;
+    lbiCropHints: TListBoxItem;
+    btnClearML: TButton;
     procedure btnLoginClick(Sender: TObject);
     procedure btnRefreshClick(Sender: TObject);
     procedure timRefreshTimer(Sender: TObject);
@@ -279,17 +315,30 @@ type
     procedure btnCallFunctionSynchronousClick(Sender: TObject);
     procedure cboParamsChange(Sender: TObject);
     procedure btnCallFunctionAsynchronousClick(Sender: TObject);
+    procedure btnStart2ndListenerClick(Sender: TObject);
+    procedure btnStopEvent2Click(Sender: TObject);
+    procedure btnVisionMLAnotateStorageClick(Sender: TObject);
+    procedure bntLoadMLClick(Sender: TObject);
+    procedure btnVisionMLAnotateFileClick(Sender: TObject);
+    procedure rdbResAsChange(Sender: TObject);
+    procedure memAnnotateFileChange(Sender: TObject);
+    procedure btnClearMLClick(Sender: TObject);
   private
     fAuth: IFirebaseAuthentication;
     fStorageObject: IStorageObject;
     fDatabase: IFirestoreDatabase;
     fTransaction: TTransaction;
     fRealTimeDB: IRealTimeDB;
-    fFirebaseEvent: IFirebaseEvent;
+    fFirebaseEvent, fFirebaseEvent2: IFirebaseEvent;
     fDownloadStream: TFileStream;
     fStorage: IFirebaseStorage;
     fUploadStream: TFileStream;
     fFirebaseFunction: IFirebaseFunctions;
+    fVisionML: IVisionML;
+    fMLResultAsJSON: TStringList;
+    fMLResultAsEvaluatedText: TStringList;
+    function GetIniFileName: string;
+    function GetMLFileName: string;
     function CheckSignedIn(Log: TMemo): boolean;
     procedure DisplayUser(mem: TMemo; User: IFirebaseUser);
     procedure DisplayTokenJWT(mem: TMemo);
@@ -297,6 +346,10 @@ type
       JSONObj: TJSONObject);
     procedure OnRecDataError(const Info, ErrMsg: string);
     procedure OnRecDataStop(Sender: TObject);
+    procedure OnRecData2(const Event: string; Params: TRequestResourceParam;
+      JSONObj: TJSONObject);
+    procedure OnRecDataError2(const Info, ErrMsg: string);
+    procedure OnRecDataStop2(Sender: TObject);
     procedure ShowDocument(Doc: IFirestoreDocument);
     procedure CheckDocument;
     procedure OnUserResp(const Info: string; Response: IFirebaseResponse);
@@ -350,6 +403,12 @@ type
     function CheckAndCreateFunctionClass: boolean;
     procedure OnFunctionSuccess(const Info: string; ResultObj: TJSONObject);
     procedure OnFunctionError(const RequestID, ErrMsg: string);
+    function CheckAndCreateMLVisionClass: boolean;
+    procedure EvaluateMLVision(Res: IVisionMLResponse);
+    procedure MLVisionError(const RequestID, ErrMsg: string);
+    function CheckPreconditionForAnotateFile: boolean;
+    function GetVisionMLFeatures: TVisionMLFeatures;
+    function GetMLModel: TVisionModel;
   end;
 
 var
@@ -361,13 +420,15 @@ implementation
 
 uses
   System.Generics.Collections, System.IniFiles, System.IOUtils, System.RTTI,
+  System.NetEncoding,
   REST.Types,
   FB4D.Authentication, FB4D.Helpers,
 {$IFDEF TOKENJWT}
   FB4D.OAuth,
 {$ENDIF}
   FB4D.Response, FB4D.Request, FB4D.Functions, FB4D.Storage,
-  FB4D.Firestore, FB4D.Document, FB4D.Configuration;
+  FB4D.Firestore, FB4D.Document, FB4D.VisionMLDefinition, FB4D.VisionML,
+  FB4D.Configuration;
 
 {$REGION 'Form Handling'}
 procedure TfmxFirebaseDemo.FormShow(Sender: TObject);
@@ -378,8 +439,7 @@ begin
     ' [' + TFirebaseConfiguration.GetLibVersionInfo + ']';
   OpenDialog.Filter := TBitmapCodecManager.GetFilterString;
   TabControl.ActiveTab := tabAuth;
-  IniFile := TIniFile.Create(IncludeTrailingPathDelimiter(TPath.GetHomePath) +
-    ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));
+  IniFile := TIniFile.Create(GetIniFileName);
   try
     edtKey.Text := IniFile.ReadString('FBProjectSettings', 'APIKey', '');
     edtProjectID.Text := IniFile.ReadString('FBProjectSettings', 'ProjectID',
@@ -395,6 +455,7 @@ begin
     edtPath.Text := IniFile.ReadString('RTDB', 'DBPath', 'TestNode');
     edtRTDBEventPath.Text := IniFile.ReadString('RTDBEvent', 'DBPath',
       'TestNode');
+    edtRTDBEvent2Path.Text := IniFile.ReadString('RTDBEvent', 'DBPath2', '');
     edtStorageBucket.Text := IniFile.ReadString('Storage', 'Bucket', '');
     edtStorageObject.Text := IniFile.ReadString('Storage', 'Object', '');
     edtStoragePath.Text := IniFile.ReadString('Storage', 'Path', '');
@@ -419,9 +480,14 @@ begin
     edtParam3Val.Text := IniFile.ReadString('Function', 'Param3Val', '');
     edtParam4.Text := IniFile.ReadString('Function', 'Param4', '');
     edtParam4Val.Text := IniFile.ReadString('Function', 'Param4Val', '');
+    edtAnotateFileType.Text := IniFile.ReadString('MLVision', 'AnnotateFileType', '');
+    edtRefStorage.Text := IniFile.ReadString('MLVision', 'AnnotateStorage', '');
   finally
     IniFile.Free;
   end;
+  if FileExists(GetMLFileName) then
+    memAnnotateFile.Lines.LoadFromFile(GetMLFileName);
+  btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
   CheckDocument;
   cboParamsChange(nil);
 end;
@@ -432,9 +498,10 @@ var
 begin
   if assigned(fRealTimeDB) and assigned(fFirebaseEvent) then
     fFirebaseEvent.StopListening;
+  FreeAndNil(fMLResultAsJSON);
+  FreeAndNil(fMLResultAsEvaluatedText);
 
-  IniFile := TIniFile.Create(IncludeTrailingPathDelimiter(TPath.GetHomePath) +
-    ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini'));
+  IniFile := TIniFile.Create(GetIniFileName);
   try
     IniFile.WriteString('FBProjectSettings', 'APIKey', edtKey.Text);
     IniFile.WriteString('FBProjectSettings', 'ProjectID', edtProjectID.Text);
@@ -444,6 +511,7 @@ begin
     IniFile.WriteString('RTDB', 'FirebaseURL', edtFirebaseURL.Text);
     IniFile.WriteString('RTDB', 'DBPath', edtPath.Text);
     IniFile.WriteString('RTDBEvent', 'DBPath', edtRTDBEventPath.Text);
+    IniFile.WriteString('RTDBEvent', 'DBPath2', edtRTDBEvent2Path.Text);
     IniFile.WriteString('Storage', 'Bucket', edtStorageBucket.Text);
     IniFile.WriteString('Storage', 'Object', edtStorageObject.Text);
     IniFile.WriteString('Storage', 'Path', edtStoragePath.Text);
@@ -468,9 +536,27 @@ begin
     IniFile.WriteString('Function', 'Param3Val', edtParam3Val.Text);
     IniFile.WriteString('Function', 'Param4', edtParam4.Text);
     IniFile.WriteString('Function', 'Param4Val', edtParam4Val.Text);
+    IniFile.WriteString('MLVision', 'AnnotateStorage', edtRefStorage.Text);
+    IniFile.WriteString('MLVision', 'AnnotateFileType', edtAnotateFileType.Text);
   finally
     IniFile.Free;
   end;
+  if memAnnotateFile.Lines.Count > 0 then
+    memAnnotateFile.Lines.SaveToFile(GetMLFileName)
+  else
+    DeleteFile(GetMLFileName);
+end;
+
+function TfmxFirebaseDemo.GetIniFileName: string;
+begin
+  result := IncludeTrailingPathDelimiter(TPath.GetHomePath) +
+    ChangeFileExt(ExtractFileName(ParamStr(0)), '.ini');
+end;
+
+function TfmxFirebaseDemo.GetMLFileName: string;
+begin
+  result := IncludeTrailingPathDelimiter(TPath.GetHomePath) +
+    ChangeFileExt(ExtractFileName(ParamStr(0)), '.MLVision.txt');
 end;
 
 procedure TfmxFirebaseDemo.TabControlChange(Sender: TObject);
@@ -946,6 +1032,8 @@ begin
       ContentType := TRESTContentType.ctIMAGE_PNG
     else if ExtType = 'gif' then
       ContentType := TRESTContentType.ctIMAGE_GIF
+    else if ExtType = 'tiff' then
+      ContentType := TRESTContentType.ctIMAGE_TIFF
     else if ExtType = 'mp4' then
       ContentType := TRESTContentType.ctVIDEO_MP4
     else
@@ -1673,6 +1761,7 @@ begin
     edtFirebaseURL.ReadOnly := true;
     edtProjectID.enabled := false;
     fFirebaseEvent := nil;
+    fFirebaseEvent2 := nil;
   end;
   result := true;
 end;
@@ -2117,8 +2206,11 @@ begin
   fFirebaseEvent := fRealTimeDB.ListenForValueEvents(
     SplitString(edtRTDBEventPath.Text.Replace('\', '/'), '/'),
     OnRecData, OnRecDataStop, OnRecDataError);
-  memScans.Lines.Add(TimeToStr(now) + ': Event handler started for ' +
-    TFirebaseHelpers.ArrStrToCommaStr(fFirebaseEvent.GetResourceParams));
+  if assigned(fFirebaseEvent) then
+    memScans.Lines.Add(TimeToStr(now) + ': Event handler started for ' +
+      TFirebaseHelpers.ArrStrToCommaStr(fFirebaseEvent.GetResourceParams))
+  else
+    memScans.Lines.Add(TimeToStr(now) + ': Event handler start failed');
   btnNotifyEvent.Enabled := false;
   btnStopEvent.Enabled := true;
 end;
@@ -2158,6 +2250,59 @@ begin
   btnNotifyEvent.Enabled := true;
   btnStopEvent.Enabled := false;
 end;
+
+procedure TfmxFirebaseDemo.btnStart2ndListenerClick(Sender: TObject);
+begin
+  if not CheckAndCreateRealTimeDBClass(memScans) then
+    exit;
+  fFirebaseEvent2 := fRealTimeDB.ListenForValueEvents(
+    SplitString(edtRTDBEvent2Path.Text.Replace('\', '/'), '/'),
+    OnRecData2, OnRecDataStop2, OnRecDataError2);
+  if assigned(fFirebaseEvent2) then
+    memScans.Lines.Add(TimeToStr(now) + ': 2nd Event handler started for ' +
+      TFirebaseHelpers.ArrStrToCommaStr(fFirebaseEvent2.GetResourceParams))
+  else
+    memScans.Lines.Add(TimeToStr(now) + ': end Event handler start failed');
+  btnStart2ndListener.Enabled := false;
+  btnStopEvent2.Enabled := true;
+end;
+
+procedure TfmxFirebaseDemo.btnStopEvent2Click(Sender: TObject);
+begin
+  if assigned(fFirebaseEvent2) then
+    fFirebaseEvent2.StopListening;
+end;
+
+procedure TfmxFirebaseDemo.OnRecData2(const Event: string;
+  Params: TRequestResourceParam; JSONObj: TJSONObject);
+var
+  par, p: string;
+begin
+  par := '[';
+  for p in Params do
+  begin
+    if par.Length > 1 then
+      par := par + ', ' + p
+    else
+      par := par + p;
+  end;
+  memScans.Lines.Add(TimeToStr(now) + '::2nd: ' + Event + par + '] = ' +
+    JSONObj.ToJSON);
+end;
+
+procedure TfmxFirebaseDemo.OnRecDataError2(const Info, ErrMsg: string);
+begin
+  memScans.Lines.Add(TimeToStr(now) + ':: 2nd Error in ' + Info + ': ' + ErrMsg);
+end;
+
+procedure TfmxFirebaseDemo.OnRecDataStop2(Sender: TObject);
+begin
+  memScans.Lines.Add(TimeToStr(now) + ': 2nd Event handler stopped');
+  fFirebaseEvent2 := nil;
+  btnStart2ndListener.Enabled := true;
+  btnStopEvent2.Enabled := false;
+end;
+
 {$ENDREGION}
 
 {$REGION 'FB Function'}
@@ -2257,6 +2402,311 @@ end;
 procedure TfmxFirebaseDemo.OnFunctionError(const RequestID, ErrMsg: string);
 begin
   memFunctionResp.Lines.Add('Call ' + RequestID + ' failed: ' + ErrMsg);
+end;
+{$ENDREGION}
+
+{$REGION 'Vision ML'}
+function TfmxFirebaseDemo.CheckAndCreateMLVisionClass: boolean;
+begin
+  if assigned(fVisionML) then
+    exit(true);
+  edtProjectID.enabled := false;
+  edtKey.enabled := false;
+  fVisionML := TVisionML.Create(edtProjectID.Text, edtKey.Text, fAuth);
+  result := true;
+end;
+
+procedure TfmxFirebaseDemo.rdbResAsChange(Sender: TObject);
+begin
+  if rdbResAsText.IsChecked then
+    memVisionML.Lines.Assign(fMLResultAsEvaluatedText)
+  else if rdbResAsJSON.IsChecked then
+    memVisionML.Lines.Assign(fMLResultAsJSON);
+end;
+
+procedure TfmxFirebaseDemo.bntLoadMLClick(Sender: TObject);
+var
+  fs: TFileStream;
+  ms: TStringStream;
+  ext: string;
+begin
+  if OpenDialogFileAnnotate.Execute then
+  begin
+    fs := TFileStream.Create(OpenDialogFileAnnotate.FileName, fmOpenRead);
+    ms := TStringStream.Create;
+    try
+      TNetEncoding.Base64.Encode(fs, ms);
+      memAnnotateFile.Text := ms.DataString;
+      ext := ExtractFileExt(OpenDialogFileAnnotate.FileName);
+      if SameText('.tiff', ext) or SameText('.tif', ext) then
+        edtAnotateFileType.Text := CONTENTTYPE_IMAGE_TIFF
+      else if SameText('.gif', ext) then
+        edtAnotateFileType.Text := CONTENTTYPE_IMAGE_GIF
+      else if SameText('.pdf', ext) then
+        edtAnotateFileType.Text := CONTENTTYPE_APPLICATION_PDF
+      else
+        edtAnotateFileType.Text := '?';
+      btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+    finally
+      ms.Free;
+      fs.Free;
+    end;
+  end;
+end;
+
+procedure TfmxFirebaseDemo.btnClearMLClick(Sender: TObject);
+begin
+  edtAnotateFileType.Text := '';
+  memAnnotateFile.Lines.Clear;
+  btnVisionMLAnotateFile.Enabled := false;
+end;
+
+function TfmxFirebaseDemo.CheckPreconditionForAnotateFile: boolean;
+begin
+  result :=
+    not(memAnnotateFile.Text.IsEmpty and edtAnotateFileType.Text.IsEmpty) and
+    (edtAnotateFileType.Text <> '?');
+end;
+
+procedure TfmxFirebaseDemo.btnVisionMLAnotateFileClick(Sender: TObject);
+begin
+  CheckAndCreateMLVisionClass;
+  FreeAndNil(fMLResultAsJSON);
+  FreeAndNil(fMLResultAsEvaluatedText);
+  fMLResultAsJSON := TStringList.Create;
+  fMLResultAsEvaluatedText := TStringList.Create;
+  memVisionML.Lines.Clear;
+  btnVisionMLAnotateFile.Enabled := false;
+  fVisionML.AnnotateFile(memAnnotateFile.Text, edtAnotateFileType.Text,
+    GetVisionMLFeatures, EvaluateMLVision,  MLVisionError, TimeToStr(now),
+      trunc(spbMaxFeatures.Value), GetMLModel);
+end;
+
+procedure TfmxFirebaseDemo.btnVisionMLAnotateStorageClick(Sender: TObject);
+var
+  ext: string;
+  ContentType: TRESTContentType;
+begin
+  CheckAndCreateMLVisionClass;
+  FreeAndNil(fMLResultAsJSON);
+  FreeAndNil(fMLResultAsEvaluatedText);
+  fMLResultAsJSON := TStringList.Create;
+  fMLResultAsEvaluatedText := TStringList.Create;
+  memVisionML.Lines.Clear;
+  btnVisionMLAnotateStorage.Enabled := false;
+  ext := ExtractFileExt(edtRefStorage.Text);
+  if SameText('.tiff', ext) or SameText('.tif', ext) then
+    ContentType := TRESTContentType.ctIMAGE_TIFF
+  else if SameText('.gif', ext) then
+    ContentType := TRESTContentType.ctIMAGE_GIF
+  else if SameText('.pdf', ext) then
+    ContentType := TRESTContentType.ctAPPLICATION_PDF
+  else
+    ContentType := edtAnotateFileType.Text;
+  fVisionML.AnnotateStorage(edtRefStorage.Text, ContentType,
+    GetVisionMLFeatures, EvaluateMLVision,  MLVisionError,
+    trunc(spbMaxFeatures.Value), GetMLModel);
+end;
+
+procedure TfmxFirebaseDemo.EvaluateMLVision(Res: IVisionMLResponse);
+var
+  Page, Ind: integer;
+  Status: TErrorStatus;
+  Annotations: TAnnotationList;
+  TextAnnotation: TTextAnnotation;
+  FaceAnnotations: TFaceAnnotationList;
+  LocalizedObjects: TLocalizedObjectList;
+  ImagePropAnnotation: TImagePropertiesAnnotation;
+  CropHintsAnnotation: TCropHintsAnnotation;
+  WebDetection: TWebDetection;
+  SafeSearchAnnotation: TSafeSearchAnnotation;
+  ProductSearchAnnotation: TProductSearchAnnotation;
+  ImageAnnotationContext: TImageAnnotationContext;
+begin
+  for Page := 0 to Res.GetNoPages - 1 do
+  begin
+    fMLResultAsEvaluatedText.Add(Format('Page: %d of %d',
+      [Page + 1, Res.GetNoPages]));
+    Status := Res.GetError(Page);
+    if Status.ErrorFound then
+      fMLResultAsEvaluatedText.Add('  ' + Status.AsStr);
+    ImageAnnotationContext := res.ImageAnnotationContext(Page);
+    ImageAnnotationContext.AddStrings(fMLResultAsEvaluatedText, 2);
+    if lbiFaceDetection.IsChecked then
+    begin
+      FaceAnnotations := Res.FaceAnnotation(Page);
+      if length(FaceAnnotations) = 0 then
+        fMLResultAsEvaluatedText.Add('  No faces found')
+      else begin
+        for Ind := 0 to length(FaceAnnotations) - 1 do
+        begin
+          fMLResultAsEvaluatedText.Add(Format('  Face %d of %d',
+              [Ind + 1, length(FaceAnnotations)]));
+          FaceAnnotations[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+        end;
+      end;
+    end;
+    if lbiLabelDetection.IsChecked then
+    begin
+      Annotations := Res.LabelAnnotations(Page);
+      if length(Annotations) = 0 then
+        fMLResultAsEvaluatedText.Add('  No labels found')
+      else begin
+        for Ind := 0 to length(Annotations) - 1 do
+        begin
+          fMLResultAsEvaluatedText.Add(Format('  Label %d of %d',
+            [Ind + 1, length(Annotations)]));
+          Annotations[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+        end;
+      end;
+    end;
+    if lbiObjectLocalization.IsChecked then
+    begin
+      LocalizedObjects := Res.LocalizedObjectAnnotation(Page);
+      if length(LocalizedObjects) = 0 then
+        fMLResultAsEvaluatedText.Add('  No localized objects found')
+      else begin
+        for Ind := 0 to length(LocalizedObjects) - 1 do
+        begin
+          fMLResultAsEvaluatedText.Add(Format('  Localized objects %d of %d',
+            [Ind + 1, length(LocalizedObjects)]));
+          LocalizedObjects[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+        end;
+      end;
+    end;
+    if lbiLandmarkDetection.IsChecked then
+    begin
+      Annotations := Res.LandmarkAnnotations(Page);
+      if length(Annotations) = 0 then
+        fMLResultAsEvaluatedText.Add('  No landmarks found')
+      else begin
+        for Ind := 0 to length(Annotations) - 1 do
+        begin
+          fMLResultAsEvaluatedText.Add(Format('  Landmark %d of %d',
+            [Ind + 1, length(Annotations)]));
+          Annotations[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+        end;
+      end;
+    end;
+    if lbiLogoDetection.IsChecked then
+    begin
+      Annotations := Res.LogoAnnotations(Page);
+      if length(Annotations) = 0 then
+        fMLResultAsEvaluatedText.Add('  No logo found')
+      else begin
+        for Ind := 0 to length(Annotations) - 1 do
+        begin
+          fMLResultAsEvaluatedText.Add(Format('  Logo %d of %d',
+            [Ind + 1, length(Annotations)]));
+          Annotations[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+        end;
+      end;
+    end;
+    if lbiTextDetection.IsChecked then
+    begin
+      Annotations := Res.TextAnnotations(Page);
+      for Ind := 0 to length(Annotations) - 1 do
+      begin
+        fMLResultAsEvaluatedText.Add(Format('  Text %d of %d',
+          [Ind + 1, length(Annotations)]));
+        Annotations[Ind].AddStrings(fMLResultAsEvaluatedText, 4);
+      end;
+    end;
+    if lbiDocTextDetection.IsChecked or lbiTextDetection.IsChecked then
+    begin
+      TextAnnotation := Res.FullTextAnnotations(Page);
+      TextAnnotation.AddStrings(fMLResultAsEvaluatedText, 2);
+    end;
+    if lbiImageProp.IsChecked then
+    begin
+      fMLResultAsEvaluatedText.Add('  Image properties');
+      ImagePropAnnotation := Res.ImagePropAnnotation(Page);
+      ImagePropAnnotation.AddStrings(fMLResultAsEvaluatedText, 4);
+    end;
+    if lbiCropHints.IsChecked then
+    begin
+      fMLResultAsEvaluatedText.Add('  Image crop hints');
+      CropHintsAnnotation := Res.CropHintsAnnotation(Page);
+      CropHintsAnnotation.AddStrings(fMLResultAsEvaluatedText, 4);
+    end;
+    if lbiWebDetection.IsChecked then
+    begin
+      fMLResultAsEvaluatedText.Add('  Web detection');
+      WebDetection := Res.WebDetection(Page);
+      WebDetection.AddStrings(fMLResultAsEvaluatedText, 4);
+    end;
+    if lbiSafeSearch.IsChecked then
+    begin
+      fMLResultAsEvaluatedText.Add('  Safe search annotation');
+      SafeSearchAnnotation := Res.SafeSearchAnnotation(Page);
+      SafeSearchAnnotation.AddStrings(fMLResultAsEvaluatedText, 4);
+    end;
+    if lbiProductSearch.IsChecked then
+    begin
+      fMLResultAsEvaluatedText.Add('  Product search annotation');
+      ProductSearchAnnotation := Res.ProductSearchAnnotation(Page);
+      ProductSearchAnnotation.AddStrings(fMLResultAsEvaluatedText, 4);
+    end;
+  end;
+  fMLResultAsJSON.Text := Res.GetFormatedJSON;
+  gpbMLResult.Enabled := true;
+  if rdbResAsText.IsChecked then
+    memVisionML.Lines.Assign(fMLResultAsEvaluatedText)
+  else if rdbResAsJSON.IsChecked then
+    memVisionML.Lines.Assign(fMLResultAsJSON);
+  btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+end;
+
+procedure TfmxFirebaseDemo.MLVisionError(const RequestID, ErrMsg: string);
+begin
+  gpbMLResult.Enabled := false;
+  memVisionML.Lines.Text := 'Error while asynchronous anotate for ' + RequestID;
+  memVisionML.Lines.Add('Error: ' + ErrMsg);
+  btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+end;
+
+function TfmxFirebaseDemo.GetVisionMLFeatures: TVisionMLFeatures;
+begin
+  result := [];
+  if lbiFaceDetection.IsChecked then
+    result := result + [vmlFaceDetection];
+  if lbiLandmarkDetection.IsChecked then
+    result := result + [vmlLandmarkDetection];
+  if lbiLogoDetection.IsChecked then
+    result := result + [vmlLogoDetection];
+  if lbiLabelDetection.IsChecked then
+    result := result + [vmlLabelDetection];
+  if lbiTextDetection.IsChecked then
+    result := result + [vmlTextDetection];
+  if lbiDocTextDetection.IsChecked then
+    result := result + [vmlDocTextDetection];
+  if lbiSafeSearch.IsChecked then
+    result := result + [vmlSafeSearchDetection];
+  if lbiImageProp.IsChecked then
+    result := result + [vmlImageProperties];
+  if lbiCropHints.IsChecked then
+    result := result + [vmlCropHints];
+  if lbiWebDetection.IsChecked then
+    result := result + [vmlWebDetection];
+  if lbiProductSearch.IsChecked then
+    result := result + [vmlProductSearch];
+  if lbiObjectLocalization.IsChecked then
+    result := result + [vmlObjectLocalization];
+end;
+
+procedure TfmxFirebaseDemo.memAnnotateFileChange(Sender: TObject);
+begin
+  btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+end;
+
+function TfmxFirebaseDemo.GetMLModel: TVisionModel;
+begin
+  if rdbLatestModel.IsChecked then
+    result := TVisionModel.vmLatest
+  else if rdbStableModel.IsChecked then
+    result := TVisionModel.vmStable
+  else
+    result := TVisionModel.vmUnset;
 end;
 {$ENDREGION}
 
