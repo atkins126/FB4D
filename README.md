@@ -1,6 +1,6 @@
 ﻿# FB4D – The OpenSource Cross-Platform Library for _Firebase_
 
-The _Google Firebase Cloud Database_ is used in many mobile and web applications worldwide and there are well-documented libraries for many languages and platforms. For Delphi, the cross-platform library **FB4D** supports the _Firebase Realtime Database_, the _Firestore Database_, the _Firebase Storage_ (for file storage), and _Firebase Functions_ (for calling server functions). For authentication, **FB4D** currently supports email/password authentication and anonymous login. 
+The _Google Firebase Cloud Database_ is used in many mobile and web applications worldwide and there are well-documented libraries for many languages and platforms. For Delphi, the cross-platform library **FB4D** supports the _Firestore Database_, the _Firebase Realtime Database_, the _Firebase Storage_ (for file storage), _Firebase Functions_ (for calling server functions), and _Vision ML_. For authentication, **FB4D** currently supports email/password authentication and anonymous login. 
 
 The library builds on the _Firebase REST-API_ and provides all functionality with synchronous and asynchronous methods for the usage within GUI application, services and background threads. Both frameworks _VCL_ and _Firemonkey_ are supported. The library is a pure source code library and relies on class interfaces. For clean and short application code it supports fluent interface design.
 
@@ -36,6 +36,14 @@ Delphi is a registered trademark of [Embarcadero Technologies, Inc](https://www.
 
 **FB4D** is developed in pure object pascal and can be used with _Firemonkey_ on all supported platforms. The library and its sample projects are currently tested with Win64/Win32, Mac64/32, Linux64 by using FMXLinux, iOS64 and Android. (Hint to mobile platforms: The TokenJWT to perform the token verification requires the installation of the OpenSSL libraries). For more information about using OpenSSL see the [installation of OpenSSL](https://github.com/SchneiderInfosystems/FB4D/wiki/Getting-Started-with-FB4D#install-openssl)
 
+#### Limitation on Android for VisionML
+
+AnnotateFile is limited to pdf only, as gif support does not work due [RSP-17682](https://quality.embarcadero.com/browse/RSP-17682), and the tif image format is not yet supported.
+
+#### Limitation on iOS for VisionML
+
+AnnotateFile is limited to pdf only, as the gif and tif image format is not yet supported by FMX.Graphics. You cannot convert an TBitmap to one of the image formats required by VisionML with the standard library.
+ 
 #### Limitation on Linux64
 
 There are no restrictions when using Delphi 11 Alexandria.

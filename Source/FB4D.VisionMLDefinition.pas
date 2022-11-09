@@ -181,6 +181,7 @@ type
     procedure Init;
     procedure SetFromJSON(TextProperty: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
+    function AsStr: string;
   end;
 
   TSymbols = record
@@ -191,7 +192,7 @@ type
     procedure Init;
     procedure SetFromJSON(Symbol: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
-    function AsStr: string;
+    function AsStr(Short: boolean = false): string;
   end;
 
   TWord = record
@@ -202,7 +203,7 @@ type
     procedure Init;
     procedure SetFromJSON(Word: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
-    function AsStr: string;
+    function AsStr(Short: boolean = false): string;
   end;
 
   TParagraph = record
@@ -214,6 +215,7 @@ type
     procedure SetFromJSON(Paragraph: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
     function AsStr: string;
+    function GetText(MinConfidence: double): string;
   end;
 
   TBlockType = (btUnkown, btText, btTable, btPicture, btRuler, btBarcode);
@@ -226,6 +228,7 @@ type
     procedure Init;
     procedure SetFromJSON(Block: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
+    function GetText(MinConfidence: double): string;
   end;
 
   TTextPages = record
@@ -236,6 +239,7 @@ type
     procedure Init;
     procedure SetFromJSON(Page: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
+    function GetText(MinConfidence: double): string;
   end;
 
   TTextAnnotation = record
@@ -245,6 +249,7 @@ type
     procedure Init;
     procedure SetFromJSON(FullText: TJSONObject);
     procedure AddStrings(s: TStrings; Indent: integer);
+    function GetText(MinConfidence: double): string;
   end;
 
   TColorInfo = record
@@ -565,6 +570,26 @@ begin
     Blocks[c].AddStrings(s, Indent + 2);
 end;
 
+function TTextPages.GetText(MinConfidence: double): string;
+var
+  c: integer;
+  sl: TStringList;
+  s: string;
+begin
+  sl := TStringList.Create;
+  try
+    for c := 0 to length(Blocks) - 1 do
+    begin
+      s := Blocks[c].GetText(MinConfidence);
+      if not s.IsEmpty then
+        sl.Add(s);
+    end;
+    result := trim(sl.Text);
+  finally
+    sl.Free;
+  end;
+end;
+
 { TTextAnnotation }
 
 procedure TTextAnnotation.Init;
@@ -615,6 +640,26 @@ begin
     s.Add(Format('%sText: %s', [Ind, Text]))
   else
     s.Add(Format('%sNo text found', [Ind]));
+end;
+
+function TTextAnnotation.GetText(MinConfidence: double): string;
+var
+  c: integer;
+  sl: TStringList;
+  s: string;
+begin
+  sl := TStringList.Create;
+  try
+    for c := 0 to length(TextPages) - 1 do
+    begin
+      s := TextPages[c].GetText(MinConfidence);
+      if not s.IsEmpty then
+        sl.Add(s);
+    end;
+    result := trim(sl.Text);
+  finally
+    sl.Free;
+  end;
 end;
 
 { TTextProperty }
@@ -701,6 +746,52 @@ begin
         dbtLineBreak:
           s.Add(Line + 'Break: end line break');
       end;
+  end;
+end;
+
+function TTextProperty.AsStr: string;
+var
+  dl: TDetectedLanguage;
+  sl: TStringList;
+begin
+  sl := TStringList.Create;
+  try
+    for dl in DetectedLanguages do
+      sl.Add(dl.AsStr);
+    if DetectedBreakType > TDetectedBreakType.dbtUnknown then
+    begin
+      if DetectedBreakIsPrefix then
+        case DetectedBreakType of
+          dbtSpace:
+            sl.Add('Prepends break: regular space');
+          dbtSureSpace:
+            sl.Add('Prepends break: wide space');
+          dbtEOLSureSpace:
+            sl.Add('Prepends break: line-wrapping');
+          dtbHyphen:
+            sl.Add('Prepends break: end line hyphen');
+          dbtLineBreak:
+            sl.Add('Prepends break: end line break');
+        end
+      else
+        case DetectedBreakType of
+          dbtSpace:
+            sl.Add('Break: regular space');
+          dbtSureSpace:
+            sl.Add('Break: wide space');
+          dbtEOLSureSpace:
+            sl.Add('Break: line-wrapping');
+          dtbHyphen:
+            sl.Add('Break: end line hyphen');
+          dbtLineBreak:
+            sl.Add('Break: end line break');
+        end;
+    end;
+    sl.QuoteChar := #0;
+    sl.Delimiter := ',';
+    result := sl.DelimitedText;
+  finally
+    sl.Free;
   end;
 end;
 
@@ -791,6 +882,26 @@ begin
   end;
 end;
 
+function TBlock.GetText(MinConfidence: double): string;
+var
+  c: integer;
+  sl: TStringList;
+  s: string;
+begin
+  sl := TStringList.Create;
+  try
+    for c := 0 to length(Paragraphs) - 1 do
+    begin
+      s := Paragraphs[c].GetText(MinConfidence);
+      if not s.IsEmpty then
+        sl.Add(s);
+    end;
+    result := trim(sl.Text);
+  finally
+    sl.Free;
+  end;
+end;
+
 { TParagraph }
 
 procedure TParagraph.Init;
@@ -829,7 +940,6 @@ procedure TParagraph.AddStrings(s: TStrings; Indent: integer);
 var
   c: integer;
 begin
-  TextProperty.AddStrings(s, Indent);
   BoundingBox.AddStrings(s, Indent);
   for c := 0 to Length(Words) - 1 do
   begin
@@ -837,18 +947,42 @@ begin
       [StringOfChar(' ', Indent), c + 1, Length(Words), Words[c].AsStr]));
     Words[c].AddStrings(s, Indent + 2);
   end;
-  if Confidence > 0 then
-    s.Add(Format('%s%3.1f%% confidence',
-      [StringOfChar(' ', Indent), Confidence * 100]));
 end;
 
 function TParagraph.AsStr: string;
 var
   c: integer;
 begin
-  result := '';
+  result := '"';
   for c := 0 to Length(Words) - 1 do
-    result := result + Words[c].AsStr + ' ';
+    result := result + Words[c].AsStr(true) + ' ';
+  result := trim(result) + '"';
+  if Confidence > 0 then
+    result := result + Format(', %3.1f%% confidence', [Confidence * 100]);
+  result := result + TextProperty.AsStr;
+end;
+
+function TParagraph.GetText(MinConfidence: double): string;
+var
+  c: integer;
+  s: string;
+begin
+  if (Confidence = 0) or (Confidence > MinConfidence) then
+  begin
+    result := '';
+    for c := 0 to length(Words) - 1 do
+    begin
+      s := Words[c].AsStr(true);
+      if not s.IsEmpty then
+      begin
+        if not result.IsEmpty and not result.EndsWith(' ') then
+          result := result + ' ' + s
+        else
+          result := result + s;
+      end;
+    end;
+  end else
+    result := '';
 end;
 
 { TWord }
@@ -889,26 +1023,30 @@ procedure TWord.AddStrings(s: TStrings; Indent: integer);
 var
   c: integer;
 begin
-  TextProperty.AddStrings(s, Indent);
   BoundingBox.AddStrings(s, Indent);
   for c := 0 to Length(Symbols) - 1 do
   begin
-    s.Add(Format('%sSymbols %d of %d',
-      [StringOfChar(' ', Indent), c + 1, Length(Symbols)]));
+    s.Add(Format('%sSymbols %d of %d: %s',
+      [StringOfChar(' ', Indent), c + 1, Length(Symbols), Symbols[c].AsStr]));
     Symbols[c].AddStrings(s, Indent + 2);
   end;
-  if Confidence > 0 then
-    s.Add(Format('%s%3.1f%% confidence',
-      [StringOfChar(' ', Indent), Confidence * 100]));
 end;
 
-function TWord.AsStr: string;
+function TWord.AsStr(Short: boolean): string;
 var
   c: integer;
 begin
   result := '';
   for c := 0 to Length(Symbols) - 1 do
-    result := result + Symbols[c].AsStr;
+    result := result + Symbols[c].AsStr(true);
+  if not Short then
+  begin
+    result := '"' + result + '"';
+    if Confidence > 0 then
+      result := result + Format(', confidence %3.1f%%', [Confidence * 100]);
+    if not TextProperty.AsStr.IsEmpty then
+      result := result + ', ' + TextProperty.AsStr;
+  end;
 end;
 
 { TSymbols }
@@ -940,21 +1078,20 @@ begin
 end;
 
 procedure TSymbols.AddStrings(s: TStrings; Indent: integer);
-var
-  Line: string;
 begin
-  TextProperty.AddStrings(s, Indent);
   BoundingBox.AddStrings(s, Indent);
-  if Confidence > 0 then
-    Line := Format(' %3.1f%% confidence', [Confidence * 100])
-  else
-    Line := '';
-  s.Add(StringOfChar(' ', Indent) + 'Symbol "' + Text + '"' + Line);
 end;
 
-function TSymbols.AsStr: string;
+function TSymbols.AsStr(Short: boolean): string;
 begin
-  result := Text;
+  if Short then
+    result := Text
+  else begin
+    result := '"' + Text + '" ';
+    if Confidence > 0 then
+      result := result + Format(', %3.1f%% confidence', [Confidence * 100]);
+    result := result + ' ' + TextProperty.AsStr;
+  end;
 end;
 
 { TBoundingPoly }

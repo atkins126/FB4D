@@ -34,7 +34,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs, FMX.Objects,
   FMX.Edit, FMX.ScrollBox, FMX.Memo, FMX.Controls.Presentation, FMX.StdCtrls,
   FMX.TabControl, FMX.DateTimeCtrls, FMX.ListBox, FMX.Layouts, FMX.EditBox,
-  FMX.SpinBox, FMX.Memo.Types,
+  FMX.SpinBox, FMX.Memo.Types, FMX.Menus, FMX.ExtCtrls,
   FB4D.Interfaces, FB4D.RealTimeDB;
 
 type
@@ -225,7 +225,6 @@ type
     edtRTDBEvent2Path: TEdit;
     tabVisionML: TTabItem;
     btnVisionMLAnotateStorage: TButton;
-    memVisionML: TMemo;
     edtRefStorage: TEdit;
     memAnnotateFile: TMemo;
     OpenDialogFileAnnotate: TOpenDialog;
@@ -256,6 +255,14 @@ type
     spbMaxFeatures: TSpinBox;
     lbiCropHints: TListBoxItem;
     btnClearML: TButton;
+    layResult: TLayout;
+    sptMLVision: TSplitter;
+    lstVisionML: TListBox;
+    imgAnotateFile: TImage;
+    rctBackgroundML: TRectangle;
+    popMLList: TPopupMenu;
+    mniMLListExport: TMenuItem;
+    pathAnotateFile: TPath;
     procedure btnLoginClick(Sender: TObject);
     procedure btnRefreshClick(Sender: TObject);
     procedure timRefreshTimer(Sender: TObject);
@@ -323,6 +330,10 @@ type
     procedure rdbResAsChange(Sender: TObject);
     procedure memAnnotateFileChange(Sender: TObject);
     procedure btnClearMLClick(Sender: TObject);
+    procedure lstVisionMLItemClick(const Sender: TCustomListBox;
+      const Item: TListBoxItem);
+    procedure mniMLListExportClick(Sender: TObject);
+    procedure rctBackgroundMLResized(Sender: TObject);
   private
     fAuth: IFirebaseAuthentication;
     fStorageObject: IStorageObject;
@@ -337,6 +348,7 @@ type
     fVisionML: IVisionML;
     fMLResultAsJSON: TStringList;
     fMLResultAsEvaluatedText: TStringList;
+    fMLMarkers: array of TPointF;
     function GetIniFileName: string;
     function GetMLFileName: string;
     function CheckSignedIn(Log: TMemo): boolean;
@@ -409,6 +421,9 @@ type
     function CheckPreconditionForAnotateFile: boolean;
     function GetVisionMLFeatures: TVisionMLFeatures;
     function GetMLModel: TVisionModel;
+    function CalcMLPreviewImgRect: TRectF;
+    procedure SetMLMarkers(Points: array of TPointF; w, h: single);
+    procedure RePosMLMarker;
   end;
 
 var
@@ -482,12 +497,26 @@ begin
     edtParam4Val.Text := IniFile.ReadString('Function', 'Param4Val', '');
     edtAnotateFileType.Text := IniFile.ReadString('MLVision', 'AnnotateFileType', '');
     edtRefStorage.Text := IniFile.ReadString('MLVision', 'AnnotateStorage', '');
+    lbiTextDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatTD', true);
+    lbiObjectLocalization.IsChecked := IniFile.ReadBool('MLVision', 'FeatOL', true);
+    lbiLabelDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatLD', true);
+    lbiCropHints.IsChecked := IniFile.ReadBool('MLVision', 'FeatCH', false);
+    lbiLandmarkDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatLM', false);
+    lbiFaceDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatFD', false);
+    lbiDocTextDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatDD', false);
+    lbiLogoDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatLO', false);
+    lbiImageProp.IsChecked := IniFile.ReadBool('MLVision', 'FeatIP', false);
+    lbiWebDetection.IsChecked := IniFile.ReadBool('MLVision', 'FeatWD', false);
+    lbiProductSearch.IsChecked := IniFile.ReadBool('MLVision', 'FeatPS', false);
+    lbiSafeSearch.IsChecked := IniFile.ReadBool('MLVision', 'FeatSS', false);
   finally
     IniFile.Free;
   end;
   if FileExists(GetMLFileName) then
     memAnnotateFile.Lines.LoadFromFile(GetMLFileName);
   btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+  rctBackgroundML.Visible := false;
+  sptMLVision.Visible := false;
   CheckDocument;
   cboParamsChange(nil);
 end;
@@ -538,6 +567,18 @@ begin
     IniFile.WriteString('Function', 'Param4Val', edtParam4Val.Text);
     IniFile.WriteString('MLVision', 'AnnotateStorage', edtRefStorage.Text);
     IniFile.WriteString('MLVision', 'AnnotateFileType', edtAnotateFileType.Text);
+    IniFile.WriteBool('MLVision', 'FeatTD', lbiTextDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatOL', lbiObjectLocalization.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatLD', lbiLabelDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatCH', lbiCropHints.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatLM', lbiLandmarkDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatFD', lbiFaceDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatDD', lbiDocTextDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatLO', lbiLogoDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatIP', lbiImageProp.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatWD', lbiWebDetection.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatPS', lbiProductSearch.IsChecked);
+    IniFile.WriteBool('MLVision', 'FeatSS', lbiSafeSearch.IsChecked);
   finally
     IniFile.Free;
   end;
@@ -2419,9 +2460,9 @@ end;
 procedure TfmxFirebaseDemo.rdbResAsChange(Sender: TObject);
 begin
   if rdbResAsText.IsChecked then
-    memVisionML.Lines.Assign(fMLResultAsEvaluatedText)
+    lstVisionML.Items.Assign(fMLResultAsEvaluatedText)
   else if rdbResAsJSON.IsChecked then
-    memVisionML.Lines.Assign(fMLResultAsJSON);
+    lstVisionML.Items.Assign(fMLResultAsJSON);
 end;
 
 procedure TfmxFirebaseDemo.bntLoadMLClick(Sender: TObject);
@@ -2451,6 +2492,19 @@ begin
       ms.Free;
       fs.Free;
     end;
+    lstVisionML.Clear;
+    pathAnotateFile.Visible := false;
+    if (edtAnotateFileType.Text = CONTENTTYPE_IMAGE_TIFF) or
+       (edtAnotateFileType.Text = CONTENTTYPE_IMAGE_GIF) then
+    begin
+      imgAnotateFile.Bitmap.LoadFromFile(OpenDialogFileAnnotate.FileName);
+      rctBackgroundML.Visible := true;
+      sptMLVision.Visible := true;
+    end else begin
+      rctBackgroundML.Visible := false;
+      sptMLVision.Visible := false;
+    end;
+    gpbMLResult.Enabled := false;
   end;
 end;
 
@@ -2459,6 +2513,11 @@ begin
   edtAnotateFileType.Text := '';
   memAnnotateFile.Lines.Clear;
   btnVisionMLAnotateFile.Enabled := false;
+  lstVisionML.Clear;
+  pathAnotateFile.Visible := false;
+  rctBackgroundML.Visible := false;
+  sptMLVision.Visible := false;
+  gpbMLResult.Enabled := false;
 end;
 
 function TfmxFirebaseDemo.CheckPreconditionForAnotateFile: boolean;
@@ -2475,7 +2534,7 @@ begin
   FreeAndNil(fMLResultAsEvaluatedText);
   fMLResultAsJSON := TStringList.Create;
   fMLResultAsEvaluatedText := TStringList.Create;
-  memVisionML.Lines.Clear;
+  lstVisionML.Items.Clear;
   btnVisionMLAnotateFile.Enabled := false;
   fVisionML.AnnotateFile(memAnnotateFile.Text, edtAnotateFileType.Text,
     GetVisionMLFeatures, EvaluateMLVision,  MLVisionError, TimeToStr(now),
@@ -2492,8 +2551,10 @@ begin
   FreeAndNil(fMLResultAsEvaluatedText);
   fMLResultAsJSON := TStringList.Create;
   fMLResultAsEvaluatedText := TStringList.Create;
-  memVisionML.Lines.Clear;
+  lstVisionML.Items.Clear;
   btnVisionMLAnotateStorage.Enabled := false;
+  rctBackgroundML.Visible := false;
+  sptMLVision.Visible := false;
   ext := ExtractFileExt(edtRefStorage.Text);
   if SameText('.tiff', ext) or SameText('.tif', ext) then
     ContentType := TRESTContentType.ctIMAGE_TIFF
@@ -2651,18 +2712,25 @@ begin
   fMLResultAsJSON.Text := Res.GetFormatedJSON;
   gpbMLResult.Enabled := true;
   if rdbResAsText.IsChecked then
-    memVisionML.Lines.Assign(fMLResultAsEvaluatedText)
+    lstVisionML.Items.Assign(fMLResultAsEvaluatedText)
   else if rdbResAsJSON.IsChecked then
-    memVisionML.Lines.Assign(fMLResultAsJSON);
+    lstVisionML.Items.Assign(fMLResultAsJSON);
   btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
 end;
 
 procedure TfmxFirebaseDemo.MLVisionError(const RequestID, ErrMsg: string);
 begin
   gpbMLResult.Enabled := false;
-  memVisionML.Lines.Text := 'Error while asynchronous anotate for ' + RequestID;
-  memVisionML.Lines.Add('Error: ' + ErrMsg);
+  lstVisionML.Items.Text := 'Error while asynchronous anotate for ' + RequestID;
+  lstVisionML.Items.Add('Error: ' + ErrMsg);
   btnVisionMLAnotateFile.Enabled := CheckPreconditionForAnotateFile;
+end;
+
+procedure TfmxFirebaseDemo.mniMLListExportClick(Sender: TObject);
+begin
+  SaveDialog.Filename := 'ML-Results.txt';
+  if SaveDialog.Execute then
+    lstVisionML.Items.SaveToFile(SaveDialog.FileName);
 end;
 
 function TfmxFirebaseDemo.GetVisionMLFeatures: TVisionMLFeatures;
@@ -2692,6 +2760,142 @@ begin
     result := result + [vmlProductSearch];
   if lbiObjectLocalization.IsChecked then
     result := result + [vmlObjectLocalization];
+end;
+
+function TfmxFirebaseDemo.CalcMLPreviewImgRect: TRectF;
+var
+  RatioFrame, RatioImg: double;
+  Offset, Dim: TPointF;
+begin
+  RatioFrame := imgAnotateFile.Width / imgAnotateFile.Height;
+  RatioImg := imgAnotateFile.Bitmap.Width / imgAnotateFile.Bitmap.Height;
+  if RatioFrame > RatioImg then
+  begin
+    Dim.X := RatioImg * imgAnotateFile.Height;
+    Dim.Y := imgAnotateFile.Height;
+    Offset.X := (imgAnotateFile.Width - Dim.X) / 2;
+    Offset.Y := 0;
+  end else begin
+    Dim.X := imgAnotateFile.Width;
+    Dim.Y := imgAnotateFile.Width / RatioImg;
+    Offset.X := 0;
+    Offset.Y := (imgAnotateFile.Height - Dim.Y) / 2;
+  end;
+  result.Create(Offset.X, Offset.Y, Offset.X + Dim.X, Offset.Y + Dim.Y);
+end;
+
+procedure TfmxFirebaseDemo.SetMLMarkers(Points: array of TPointF; w, h: single);
+var
+  c: integer;
+begin
+  SetLength(fMLMarkers, length(Points));
+  for c := 0 to length(Points) - 1 do
+    fMLMarkers[c] := TPointF.Create(Points[c].X / w, Points[c].Y / h);
+  RePosMLMarker;
+end;
+
+procedure TfmxFirebaseDemo.RePosMLMarker;
+var
+  Bounds: TRectF;
+  p: TPointF;
+  Inital: boolean;
+begin
+  Bounds := CalcMLPreviewImgRect;
+  pathAnotateFile.Position.X := Bounds.Left;
+  pathAnotateFile.Position.Y := Bounds.Top;
+  pathAnotateFile.Width := Bounds.Width;
+  pathAnotateFile.Height := Bounds.Height;
+  pathAnotateFile.Data.Clear;
+  pathAnotateFile.Data.MoveTo(PointF(0, 0));
+  pathAnotateFile.Data.MoveTo(PointF(1, 1));
+  if length(fMLMarkers) > 1 then
+  begin
+    Inital := true;
+    for p in fMLMarkers do
+    begin
+      if Inital then
+        pathAnotateFile.Data.MoveTo(p)
+      else
+        pathAnotateFile.Data.LineTo(p);
+      Inital := false;
+    end;
+    pathAnotateFile.Data.ClosePath;
+  end
+  else if length(fMLMarkers) = 1 then
+  begin
+    p := fMLMarkers[0];
+    pathAnotateFile.Data.AddEllipse(
+      RectF(p.X - 0.01, p.Y - 0.01,
+            p.X + 0.01, p.Y + 0.01));
+  end;
+  pathAnotateFile.Visible := true;
+end;
+
+procedure TfmxFirebaseDemo.rctBackgroundMLResized(Sender: TObject);
+begin
+  if pathAnotateFile.Visible then
+    RePosMLMarker;
+end;
+
+procedure TfmxFirebaseDemo.lstVisionMLItemClick(const Sender: TCustomListBox;
+  const Item: TListBoxItem);
+
+  function ConvertToPoint(s: string): TPointF;
+  var
+    p1, p2: integer;
+    X, Y: double;
+  begin
+    p1 := Pos('x: ', s);
+    p2 := Pos(',', s);
+    X := StrToFloat(s.Substring(p1 + 2, p2 - p1 - 3));
+    s := s.Substring(p2);
+    p1 := Pos('y: ', s);
+    p2 := Pos(',', s);
+    if p2 <= 0 then
+      p2 := Pos(']', s);
+    Y := StrToFloat(s.Substring(p1 + 2, p2 - p1 - 3));
+    result := PointF(X, Y);
+  end;
+
+var
+  Line: string;
+  Vertices: TStringDynArray;
+begin
+  if not imgAnotateFile.visible then
+    exit;
+  Line := Trim(Item.Text);
+  if Line.StartsWith('Vertices: ') then
+  begin
+    Vertices := SplitString(Line, '[');
+    if length(Vertices) = 5 then
+      SetMLMarkers(
+        [ConvertToPoint(Vertices[1]),
+         ConvertToPoint(Vertices[2]),
+         ConvertToPoint(Vertices[3]),
+         ConvertToPoint(Vertices[4])],
+        imgAnotateFile.Bitmap.Width,
+        imgAnotateFile.Bitmap.Height);
+  end
+  else if Line.StartsWith('Normalized Vertices: ') then
+  begin
+    Line := Line.SubString(length('Normalized Vertices: '));
+    Vertices := SplitString(Line, '[');
+    if length(Vertices) = 5 then
+      SetMLMarkers(
+        [ConvertToPoint(Vertices[1]),
+         ConvertToPoint(Vertices[2]),
+         ConvertToPoint(Vertices[3]),
+         ConvertToPoint(Vertices[4])],
+        1, 1);
+  end
+  else if Line.Contains('Face landmark ') and Line.Contains(' at [') then
+  begin
+    Line := Line.Substring(Pos(' at [', Line) + 2);
+    SetMLMarkers([ConvertToPoint(Line)],
+      imgAnotateFile.Bitmap.Width,
+      imgAnotateFile.Bitmap.Height);
+  end else
+    pathAnotateFile.Visible := false;
 end;
 
 procedure TfmxFirebaseDemo.memAnnotateFileChange(Sender: TObject);
