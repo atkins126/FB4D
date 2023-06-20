@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2022 Christoph Schneider                                 }
+{  Copyright (c) 2018-2023 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -83,7 +83,7 @@ type
       OnError: TOnSimpleDownloadError = nil);
     class procedure SimpleDownloadSynchronous(const DownloadUrl: string;
       Stream: TStream);
-    {$IF Defined(FMX)}
+    {$IF Defined(FMX) OR Defined(FGX)}
     class function ContentTypeToFileExt(const ContentType: string): string;
     class function ImageStreamToContentType(Stream: TStream): TRESTContentType;
     {$ENDIF}
@@ -156,10 +156,11 @@ type
     class function SetDoubleValue(Val: double): TJSONObject;
     class function SetDouble(const VarName: string; Val: double): TJSONPair;
     // TimeStamp
-    function GetTimeStampValue: TDateTime; overload;
-    function GetTimeStampValue(const Name: string): TDateTime; overload;
-    function GetTimeStampValueDef(const Name: string;
-      Default: TDateTime = 0): TDateTime;
+    function GetTimeStampValue(TimeZone: TTimeZone = tzUTC): TDateTime; overload;
+    function GetTimeStampValue(const Name: string;
+      TimeZone: TTimeZone = tzUTC): TDateTime; overload;
+    function GetTimeStampValueDef(const Name: string; Default: TDateTime = 0;
+      TimeZone: TTimeZone = tzUTC): TDateTime;
     class function SetTimeStampValue(Val: TDateTime): TJSONObject;
     class function SetTimeStamp(const VarName: string;
       Val: TDateTime): TJSONPair;
@@ -221,7 +222,8 @@ type
     function AddOrderByType(const TypeName: string): TQueryParams;
     function AddLimitToFirst(LimitToFirst: integer): TQueryParams;
     function AddLimitToLast(LimitToLast: integer): TQueryParams;
-    function AddTransaction(const Transaction: string): TQueryParams;
+    function AddTransaction(
+      Transaction: TFirestoreReadTransaction): TQueryParams;
     function AddPageSize(PageSize: integer): TQueryParams;
     function AddPageToken(const PageToken: string): TQueryParams;
   end;
@@ -241,6 +243,8 @@ uses
   VCL.Forms,
 {$ELSEIF Defined(FMX)}
   FMX.Types, FMX.Forms, FMX.Graphics, FMX.Consts,
+{$ELSEIF Defined(FGX)}
+  FGX.Forms, FGX.Logs,
 {$ELSE}
   FMX.Types, FMX.Forms,
 {$ENDIF}
@@ -419,6 +423,8 @@ begin
   FMX.Types.Log.d(msg, []);
   // there is a bug in DE 10.2 when the wrong method is calling?
   {$ENDIF}
+{$ELSEIF Defined(FGX)}
+  TfgLog.Debug(msg);
 {$ELSEIF Defined(VCL)}
   OutputDebugString(PChar(msg));
 {$ELSEIF Defined(MSWINDOWS)}
@@ -656,9 +662,19 @@ begin
     result := TTimeZone.Local.ToLocalTime(result);
 end;
 
-{$IF Defined(FMX)}
+{$IF Defined(FMX) OR Defined(FGX)}
 class function TFirebaseHelpers.ContentTypeToFileExt(
   const ContentType: string): string;
+
+  {$IF CompilerVersion < 35} // Delphi 10.4 and before
+  function SameText(const ContentType: string;
+    AContentType: TRESTContentType): boolean;
+  begin
+    result := System.SysUtils.SameText(ContentType,
+      ContentTypeToString(AContentType));
+  end;
+  {$ENDIF}
+
 begin
   if SameText(ContentType, TRESTContentType.ctIMAGE_JPEG) then
     result := SJPGImageExtension
@@ -709,9 +725,13 @@ begin
     result := TRESTContentType.ctIMAGE_PNG
   else if ImgType = STIFFImageExtension then
     result := TRESTContentType.ctIMAGE_TIFF
-  else if ImgType = SBMPImageExtension then
+  else // if ImgType = SBMPImageExtension then
     // Unsupported image type!
+    {$IF CompilerVersion < 35} // Delphi 10.4 and before
+    result := ctNone;
+    {$ELSE}
     result := '';
+    {$ENDIF}
 end;
 {$ENDIF}
 
@@ -1149,7 +1169,11 @@ var
   c: integer;
 begin
   TrimmedPath := TrimStartAndEndPathDelimiters(Path);
+  {$IF CompilerVersion < 34} // Delphi 10.3 and before
+  c := TrimmedPath.LastDelimiter('/\');
+  {$ELSE}
   c := TrimmedPath.LastDelimiter(['/', '\']);
+  {$ENDIF}
   if c < 0 then
     result := TrimmedPath
   else
@@ -1163,7 +1187,11 @@ var
   c: integer;
 begin
   TrimmedPath := TrimStartAndEndPathDelimiters(Path);
+  {$IF CompilerVersion < 34} // Delphi 10.3 and before
+  c := TrimmedPath.LastDelimiter('/\');
+  {$ELSE}
   c := TrimmedPath.LastDelimiter(['/', '\']);
+  {$ENDIF}
   if c < 0 then
     result := []
   else
@@ -1311,31 +1339,41 @@ begin
     result := Default;
 end;
 
-function TJSONHelpers.GetTimeStampValue: TDateTime;
+function TJSONHelpers.GetTimeStampValue(
+  TimeZone: FB4D.Interfaces.TTimeZone): TDateTime;
 begin
   result := GetValue<TDateTime>('timestampValue');
+  if TimeZone = tzLocalTime then
+    result := TFirebaseHelpers.ConvertToLocalDateTime(result);
 end;
 
-function TJSONHelpers.GetTimeStampValue(const Name: string): TDateTime;
+function TJSONHelpers.GetTimeStampValue(const Name: string;
+  TimeZone: FB4D.Interfaces.TTimeZone): TDateTime;
 var
   Val: TJSONValue;
 begin
   Val := GetValue(Name);
   if assigned(Val) then
-    result := (Val as TJSONObject).GetTimeStampValue
-  else
+  begin
+    result := (Val as TJSONObject).GetTimeStampValue;
+    if TimeZone = tzLocalTime then
+      result := TFirebaseHelpers.ConvertToLocalDateTime(result);
+  end else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
 function TJSONHelpers.GetTimeStampValueDef(const Name: string;
-  Default: TDateTime): TDateTime;
+  Default: TDateTime; TimeZone: FB4D.Interfaces.TTimeZone): TDateTime;
 var
   Val: TJSONValue;
 begin
   Val := GetValue(Name);
   if assigned(Val) then
-    result := (Val as TJSONObject).GetTimeStampValue
-  else
+  begin
+    result := (Val as TJSONObject).GetTimeStampValue;
+    if TimeZone = tzLocalTime then
+      result := TFirebaseHelpers.ConvertToLocalDateTime(result);
+  end else
     result := Default;
 end;
 
@@ -1798,7 +1836,7 @@ begin
 end;
 
 function TQueryParamsHelper.AddTransaction(
-  const Transaction: string): TQueryParams;
+  Transaction: TFirestoreReadTransaction): TQueryParams;
 begin
   if not Transaction.IsEmpty then
     Add(cFirestoreTransaction, [Transaction]);
