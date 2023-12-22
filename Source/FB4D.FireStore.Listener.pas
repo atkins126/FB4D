@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2022 Christoph Schneider                                 }
+{  Copyright (c) 2018-2023 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -158,7 +158,6 @@ var
   EventName: string;
 begin
   inherited Create(true);
-  Assert(assigned(Auth), 'Authentication not initalized');
   fAuth := Auth;
   fDatabase := 'projects/' + ProjectID + '/databases/' + DatabaseID;
   fTargets := TTargets.Create;
@@ -168,7 +167,9 @@ begin
   EventName := '';
   {$ENDIF}
   fGetFinishedEvent := TEvent.Create(nil, false, false, EventName);
+  {$IFNDEF CONSOLE}
   OnTerminate := OnEndThread;
+  {$ENDIF}
   FreeOnTerminate := false;
   {$IFNDEF LINUX64}
   NameThreadForDebugging('FB4D.FSListenerThread', ThreadID);
@@ -787,7 +788,8 @@ begin
         DataStr, TRESTContentType.ctTEXT_PLAIN, QueryParams, tmBearer);
       if Response.StatusOk then
       begin
-        fLastTokenRefreshCount := fAuth.GetTokenRefreshCount;
+        if assigned(fAuth) then
+          fLastTokenRefreshCount := fAuth.GetTokenRefreshCount;
         result := FetchSIDFromResponse(Response);
       end else
         ReportErrorInThread(Format(rsEvtStartFailed, [Response.StatusText]));

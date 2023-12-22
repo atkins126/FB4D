@@ -21,60 +21,35 @@
 {                                                                              }
 {******************************************************************************}
 
-unit Config;
-
-interface
+program FSObj2Doc;
 
 uses
-  System.Classes, System.SysUtils,
-  DUnitX.TestFramework,
-  FB4D.Interfaces;
+  Vcl.Forms,
+  Obj2DocTest in 'Obj2DocTest.pas' {frmObj2Doc},
+  FB4D.Authentication in '..\..\Source\FB4D.Authentication.pas',
+  FB4D.Document in '..\..\Source\FB4D.Document.pas',
+  FB4D.Firestore in '..\..\Source\FB4D.Firestore.pas',
+  FB4D.Interfaces in '..\..\Source\FB4D.Interfaces.pas',
+  FB4D.Request in '..\..\Source\FB4D.Request.pas',
+  FB4D.Response in '..\..\Source\FB4D.Response.pas',
+  FB4D.Configuration in '..\..\Source\FB4D.Configuration.pas',
+  FB4D.Helpers in '..\..\Source\FB4D.Helpers.pas',
+  FB4D.VisionMLDefinition in '..\..\Source\FB4D.VisionMLDefinition.pas',
+  FB4D.Functions in '..\..\Source\FB4D.Functions.pas',
+  FB4D.RealTimeDB in '..\..\Source\FB4D.RealTimeDB.pas',
+  FB4D.Storage in '..\..\Source\FB4D.Storage.pas',
+  FB4D.FireStore.Listener in '..\..\Source\FB4D.FireStore.Listener.pas',
+  FB4D.RealTimeDB.Listener in '..\..\Source\FB4D.RealTimeDB.Listener.pas',
+  FB4D.VisionML in '..\..\Source\FB4D.VisionML.pas';
 
-{$M+}
-type
-  [TestFixture]
-  UT_Config = class(TObject)
-  private
-    fConfig: IFirebaseConfiguration;
-  public
-    [Setup]
-    procedure Setup;
-    [TearDown]
-    procedure TearDown;
-  published
-    procedure CheckConfig;
-  end;
+{$R *.res}
 
-implementation
-
-uses
-  FB4D.Configuration;
-
-{$I FBConfig.inc}
-
-{ UT_Config }
-
-procedure UT_Config.Setup;
 begin
-  fConfig := TFirebaseConfiguration.Create(cApiKey, cProjectID, cBucket);
-end;
-
-procedure UT_Config.TearDown;
-begin
-  fConfig := nil;
-end;
-
-procedure UT_Config.CheckConfig;
-begin
-  Assert.AreEqual(fConfig.ProjectID, cProjectID);
-  Assert.IsNotNull(fConfig.Auth);
-  Assert.IsNotNull(fConfig.RealTimeDB);
-  Assert.IsNotNull(fConfig.Database);
-  Assert.IsNotNull(fConfig.Storage);
-  Assert.IsNotNull(fConfig.Functions);
-  Status('Passed for ' + TFirebaseConfiguration.GetLibVersionInfo);
-end;
-
-initialization
-  TDUnitX.RegisterTestFixture(UT_Config);
+  {$IFDEF DEBUG}
+  ReportMemoryLeaksOnShutdown := true;
+  {$ENDIF}
+  Application.Initialize;
+  Application.MainFormOnTaskbar := True;
+  Application.CreateForm(TfrmObj2Doc, frmObj2Doc);
+  Application.Run;
 end.

@@ -562,9 +562,8 @@ begin
   {$IFDEF DEBUG}
   TFirebaseHelpers.Log('Doc: ' + Doc.AsJSON.ToJSON);
   {$ENDIF}
-  fConfig.Database.InsertOrUpdateDocument(
-    [cCollectionID, Doc.DocumentName(false)], Doc, nil,
-    OnDocWrite, OnDocWriteError);
+  fConfig.Database.InsertOrUpdateDocument(Doc, nil, OnDocWrite,
+    OnDocWriteError);
   btnPushMessage.Enabled := false;
 end;
 
@@ -577,8 +576,8 @@ begin
     fConfig.ProjectID);
   Doc.AddOrUpdateField(TJSONObject.SetString('Message', edtMessage.Text));
   Doc.AddOrUpdateField(TJSONObject.SetTimeStamp('Edited', now));
-  fConfig.Database.PatchDocument([cCollectionID, fEditDocID], Doc,
-    ['Message', 'Edited'], OnDocWrite, OnDocWriteError);
+  fConfig.Database.PatchDocument(Doc, ['Message', 'Edited'], OnDocWrite,
+    OnDocWriteError);
   btnEditMessage.Enabled := false;
   btnDeleteMessage.Enabled := false;
 end;

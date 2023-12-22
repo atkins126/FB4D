@@ -112,6 +112,9 @@ type
     Document: IFirestoreDocument) of object;
   TOnDocuments = procedure(const Info: string;
     Documents: IFirestoreDocuments) of object;
+  TOnChangedDocument = procedure(ChangedDocument: IFirestoreDocument) of object;
+  TOnDeletedDocument = procedure(const DeleteDocumentPath: string;
+    TimeStamp: TDateTime) of object;
   TFirestoreReadTransaction = string; // A base64 encoded ID
   TOnBeginReadTransaction = procedure(Transaction: TFirestoreReadTransaction)
     of object;
@@ -142,8 +145,8 @@ type
     type TOnSuccessCase = (oscUndef, oscFB, oscUser, oscFetchProvider,
       oscPwdVerification, oscGetUserData, oscRefreshToken, oscRTDBValue,
       oscRTDBDelete, oscRTDBServerVariable, oscDocument, oscDocuments,
-      oscBeginReadTransaction, oscCommitWriteTransaction, oscStorage,
-      oscStorageDeprecated, oscStorageUpload, oscStorageGetAndDown,
+      oscDocumentDeleted, oscBeginReadTransaction, oscCommitWriteTransaction,
+      oscStorage, oscStorageDeprecated, oscStorageUpload, oscStorageGetAndDown,
       oscDelStorage, oscFunctionSuccess, oscVisionML);
     constructor Create(OnResp: TOnFirebaseResp);
     constructor CreateUser(OnUserResp: TOnUserResponse);
@@ -158,6 +161,8 @@ type
       OnRTDBServerVariableResp: TOnRTDBServerVariable);
     constructor CreateFirestoreDoc(OnDocumentResp: TOnDocument);
     constructor CreateFirestoreDocs(OnDocumentsResp: TOnDocuments);
+    constructor CreateFirestoreDocDelete(
+      OnDocumentDeleteResp: TOnDeletedDocument);
     constructor CreateFirestoreReadTransaction(
       OnBeginReadTransactionResp: TOnBeginReadTransaction);
     constructor CreateFirestoreCommitWriteTransaction(
@@ -183,6 +188,7 @@ type
       oscRTDBServerVariable: (OnRTDBServerVariable: TOnRTDBServerVariable);
       oscDocument: (OnDocument: TOnDocument);
       oscDocuments: (OnDocuments: TOnDocuments);
+      oscDocumentDeleted: (OnDocumentDeleted: TOnDeletedDocument);
       oscBeginReadTransaction: (OnBeginReadTransaction: TOnBeginReadTransaction);
       oscCommitWriteTransaction:
         (OnCommitWriteTransaction: TOnCommitWriteTransaction);
@@ -212,6 +218,7 @@ type
       OnRTDBServerVariable: TOnRTDBServerVariable;
       OnDocument: TOnDocument;
       OnDocuments: TOnDocuments;
+      OnDocumentDeleted: TOnDeletedDocument;
       OnBeginReadTransaction: TOnBeginReadTransaction;
       OnCommitWriteTransaction: TOnCommitWriteTransaction;
       OnStorage: TOnStorage;
@@ -452,20 +459,20 @@ type
     function HasEndAt: boolean;
   end;
 
-  TOnChangedDocument = procedure(ChangedDocument: IFirestoreDocument) of object;
-  TOnDeletedDocument = procedure(const DeleteDocumentPath: string;
-    TimeStamp: TDateTime) of object;
-
   IFirestoreWriteTransaction = interface
+    function NumberOfTransactions: cardinal;
     procedure UpdateDoc(Document: IFirestoreDocument);
     procedure PatchDoc(Document: IFirestoreDocument;
       UpdateMask: TStringDynArray);
+    procedure DeleteDoc(const DocumentFullPath: string);
   end;
 
   EFirestoreListener = class(Exception);
   EFirestoreDatabase = class(Exception);
 
   IFirestoreDatabase = interface(IInterface)
+    function GetProjectID: string;
+    function GetDatabaseID: string;
     procedure RunQuery(StructuredQuery: IStructuredQuery;
       OnDocuments: TOnDocuments; OnRequestError: TOnRequestError;
       QueryParams: TQueryParams = nil); overload;
@@ -491,19 +498,39 @@ type
       QueryParams: TQueryParams = nil): IFirestoreDocument;
     procedure InsertOrUpdateDocument(DocumentPath: TRequestResourceParam;
       Document: IFirestoreDocument; QueryParams: TQueryParams;
-      OnDocument: TOnDocument; OnRequestError: TOnRequestError);
+      OnDocument: TOnDocument; OnRequestError: TOnRequestError); overload;
+      deprecated 'Use method without DocumentPath and overtake full path in document';
+    procedure InsertOrUpdateDocument(Document: IFirestoreDocument;
+      QueryParams: TQueryParams; OnDocument: TOnDocument;
+      OnRequestError: TOnRequestError); overload;
     function InsertOrUpdateDocumentSynchronous(
       DocumentPath: TRequestResourceParam; Document: IFirestoreDocument;
-      QueryParams: TQueryParams = nil): IFirestoreDocument;
+      QueryParams: TQueryParams = nil): IFirestoreDocument; overload;
+      deprecated 'Use method without DocumentPath and overtake full path in document';
+    function InsertOrUpdateDocumentSynchronous(Document: IFirestoreDocument;
+      QueryParams: TQueryParams = nil): IFirestoreDocument; overload;
     procedure PatchDocument(DocumentPath: TRequestResourceParam;
       DocumentPart: IFirestoreDocument; UpdateMask: TStringDynArray;
       OnDocument: TOnDocument; OnRequestError: TOnRequestError;
-      Mask: TStringDynArray = []);
+      Mask: TStringDynArray = []); overload;
+      deprecated 'Use method without DocumentPath and overtake full path in document';
+    procedure PatchDocument(DocumentPart: IFirestoreDocument;
+      UpdateMask: TStringDynArray; OnDocument: TOnDocument;
+      OnRequestError: TOnRequestError; Mask: TStringDynArray = []); overload;
     function PatchDocumentSynchronous(DocumentPath: TRequestResourceParam;
       DocumentPart: IFirestoreDocument; UpdateMask: TStringDynArray;
-      Mask: TStringDynArray = []): IFirestoreDocument;
+      Mask: TStringDynArray = []): IFirestoreDocument; overload;
+      deprecated 'Use method without DocumentPath and overtake full path in document';
+    function PatchDocumentSynchronous(DocumentPart: IFirestoreDocument;
+      UpdateMask: TStringDynArray;
+      Mask: TStringDynArray = []): IFirestoreDocument; overload;
     procedure Delete(Params: TRequestResourceParam; QueryParams: TQueryParams;
       OnDeleteResponse: TOnFirebaseResp; OnRequestError: TOnRequestError);
+      overload;
+      deprecated 'Use method with TOnDeletedDocument call back method';
+    procedure Delete(Params: TRequestResourceParam; QueryParams: TQueryParams;
+      OnDeletedDoc: TOnDeletedDocument; OnError: TOnRequestError);
+      overload;
     function DeleteSynchronous(Params: TRequestResourceParam;
       QueryParams: TQueryParams = nil): IFirebaseResponse;
     // Listener subscription
@@ -532,6 +559,8 @@ type
     procedure CommitWriteTransaction(Transaction: IFirestoreWriteTransaction;
       OnCommitWriteTransaction: TOnCommitWriteTransaction;
       OnRequestError: TOnRequestError);
+    property ProjectID: string read GetProjectID;
+    property DatabaseID: string read GetDatabaseID;
   end;
 
 {$IFDEF TOKENJWT}
@@ -992,6 +1021,14 @@ begin
   Create(nil);
   OnSuccessCase := oscDocuments;
   OnDocuments := OnDocumentsResp;
+end;
+
+constructor TOnSuccess.CreateFirestoreDocDelete(
+  OnDocumentDeleteResp: TOnDeletedDocument);
+begin
+  Create(nil);
+  OnSuccessCase := oscDocumentDeleted;
+  OnDocumentDeleted := OnDocumentDeleteResp;
 end;
 
 constructor TOnSuccess.CreateFirestoreReadTransaction(

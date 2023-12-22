@@ -50,6 +50,7 @@ type
     class function ConvertRFC5322ToLocalDateTime(DateTime: string): TDateTime;
     class function ConvertTimeStampToLocalDateTime(Timestamp: Int64): TDateTime;
     class function ConvertToLocalDateTime(DateTimeStampUTC: TDateTime): TDateTime;
+    class function ConvertToUTCDateTime(DateTimeStampLocal: TDateTime): TDateTime;
     // Query parameter helpers
     class function EncodeQueryParams(QueryParams: TQueryParams): string;
     class function EncodeQueryParamsWithToken(QueryParams: TQueryParams;
@@ -68,7 +69,8 @@ type
     // FBID is based on charset of cBase64: Helpers and converter to GUID
     // PUSHID is based on charset of cPushID64: Supports chronological sorting
     type TIDKind = (FBID {random 22 Chars},
-                    PUSHID {timestamp and random: total 20 Chars});
+                    PUSHID {timestamp and random: total 20 Chars},
+                    FSID {random 20 Chars});
     class function CreateAutoID(IDKind: TIDKind = FBID): string;
     class function ConvertGUIDtoFBID(Guid: TGuid): string;
     class function ConvertFBIDtoGUID(const FBID: string): TGuid;
@@ -162,9 +164,10 @@ type
       TimeZone: TTimeZone = tzUTC): TDateTime; overload;
     function GetTimeStampValueDef(const Name: string; Default: TDateTime = 0;
       TimeZone: TTimeZone = tzUTC): TDateTime;
-    class function SetTimeStampValue(Val: TDateTime): TJSONObject;
+    class function SetTimeStampValue(Val: TDateTime;
+      TimeZone: FB4D.Interfaces.TTimeZone = tzUTC): TJSONObject;
     class function SetTimeStamp(const VarName: string;
-      Val: TDateTime): TJSONPair;
+      Val: TDateTime; TimeZone: FB4D.Interfaces.TTimeZone = tzUTC): TJSONPair;
     // Null
     class function SetNullValue: TJSONObject;
     class function SetNull(const VarName: string): TJSONPair;
@@ -197,6 +200,7 @@ type
     function GetMapItem(const Name: string): TJSONObject; overload;
     function GetMapItem(const Name: string; Ind: integer): TJSONPair; overload;
     function GetMapValue(const Name: string; Ind: integer): TJSONObject;
+    function GetMapValues: TJSONObject;
     class function SetMapValue(MapVars: TFirestoreMap): TJSONObject;
     class function SetMap(const VarName: string;
       MapVars: TFirestoreMap): TJSONPair;
@@ -206,9 +210,11 @@ type
     function GetArrayItem(Ind: integer): TJSONObject; overload;
     function GetArrayItem(const Name: string; Ind: integer): TJSONObject;
       overload;
+    function GetArrayValues: TJSONObjects;
     function GetStringArray: TStringDynArray;
     class function SetArray(const VarName: string;
       FSArr: TFirestoreArr): TJSONPair;
+    class function SetArrayValue(FSArr: TFirestoreArr): TJSONObject;
     class function SetStringArray(const VarName: string;
       Strings: TStringDynArray): TJSONPair; overload;
     class function SetStringArray(const VarName: string;
@@ -224,6 +230,12 @@ type
     function AddOrderByType(const TypeName: string): TQueryParams;
     function AddLimitToFirst(LimitToFirst: integer): TQueryParams;
     function AddLimitToLast(LimitToLast: integer): TQueryParams;
+    function AddOrderByAndEqualTo(const FieldName,
+      FilterValue: string): TQueryParams; overload;
+    function AddOrderByAndEqualTo(const FieldName: string;
+      FilterValue: integer): TQueryParams; overload;
+    function AddOrderByAndEqualTo(const FieldName: string;
+      FilterValue: extended): TQueryParams; overload;
     function AddTransaction(
       Transaction: TFirestoreReadTransaction): TQueryParams;
     function AddPageSize(PageSize: integer): TQueryParams;
@@ -255,6 +267,8 @@ uses
   IdGlobalProtocols;
 
 resourcestring
+  rsArrFieldNotJSONObj = 'Arrayfield[%d] does not contain a JSONObject';
+  rsArrFieldNotTypeValue = 'Arrayfield[%d] does not contain type-value pair';
   rsArrayItemOutOfBounds = 'Array item %d out of bounds';
   rsInvalidArrayItem = 'Invalid array item %d';
   rsMapItemOutOfBounds = 'Map item %d out of bounds';
@@ -307,6 +321,12 @@ class function TFirebaseHelpers.ConvertToLocalDateTime(
   DateTimeStampUTC: TDateTime): TDateTime;
 begin
   result := TTimeZone.Local.ToLocalTime(DateTimeStampUTC);
+end;
+
+class function TFirebaseHelpers.ConvertToUTCDateTime(
+  DateTimeStampLocal: TDateTime): TDateTime;
+begin
+  result := TTimeZone.Local.ToUniversalTime(DateTimeStampLocal);
 end;
 
 class function TFirebaseHelpers.EncodeQueryParams(
@@ -548,11 +568,24 @@ begin
 end;
 
 class function TFirebaseHelpers.CreateAutoID(IDKind: TIDKind = FBID): string;
+
+  function ShortenIDTo20Chars(const ID: string): string;
+  begin
+    result := ReplaceStr(ID, '_', '');
+    result := ReplaceStr(ID, '-', '');
+    if result.Length > 20 then
+      result := result.Substring(0, 20);
+    while result.Length < 20 do
+      result := result + cBase64[Random(62)];
+  end;
+
 begin
   // use OS to generate a random number
   case IDKind of
     FBID:
       result := ConvertGUIDtoFBID(TGuid.NewGuid);
+    FSID:
+      result := ShortenIDTo20Chars(ConvertGUIDtoFBID(TGuid.NewGuid));
     PUSHID:
       result := ConvertTimeStampAndRandomPatternToPUSHID(now,
         THashMD5.GetHashBytes(GuidToString(TGUID.NewGuid)));
@@ -1479,16 +1512,19 @@ begin
   result := TJSONPair.Create(VarName, SetBooleanValue(Val));
 end;
 
-class function TJSONHelpers.SetTimeStampValue(Val: TDateTime): TJSONObject;
+class function TJSONHelpers.SetTimeStampValue(Val: TDateTime;
+  TimeZone: FB4D.Interfaces.TTimeZone): TJSONObject;
 begin
+  if TimeZone = tzLocalTime then
+    Val := TFirebaseHelpers.ConvertToUTCDateTime(Val);
   result := TJSONObject.Create(TJSONPair.Create('timestampValue',
     TJSONString.Create(TFirebaseHelpers.CodeRFC3339DateTime(Val))));
 end;
 
 class function TJSONHelpers.SetTimeStamp(const VarName: string;
-  Val: TDateTime): TJSONPair;
+  Val: TDateTime; TimeZone: FB4D.Interfaces.TTimeZone): TJSONPair;
 begin
-  result := TJSONPair.Create(VarName, SetTimeStampValue(Val));
+  result := TJSONPair.Create(VarName, SetTimeStampValue(Val, TimeZone));
 end;
 
 class function TJSONHelpers.SetNullValue: TJSONObject;
@@ -1659,6 +1695,11 @@ begin
   result := GetMapItem(Name, Ind).JsonValue as TJSONObject;
 end;
 
+function TJSONHelpers.GetMapValues: TJSONObject;
+begin
+  result := GetValue<TJSONObject>('mapValue');
+end;
+
 class function TJSONHelpers.SetMapValue(MapVars: TFirestoreMap): TJSONObject;
 var
   Map: TJSONObject;
@@ -1677,21 +1718,20 @@ begin
   result := TJSONPair.Create(VarName, SetMapValue(MapVars));
 end;
 
+class function TJSONHelpers.SetArrayValue(FSArr: TFirestoreArr): TJSONObject;
+var
+  Arr: TJSONArray;
+  c: integer;
+begin
+  Arr := TJSONArray.Create;
+  for c := 0 to length(FSArr) - 1 do
+    Arr.AddElement(FSArr[c]);
+  result := TJSONObject.Create(TJSONPair.Create('arrayValue',
+    TJSONObject.Create(TJSONPair.Create('values', Arr))));
+end;
+
 class function TJSONHelpers.SetArray(const VarName: string;
   FSArr: TFirestoreArr): TJSONPair;
-
-  function SetArrayValue(FSArr: TFirestoreArr): TJSONObject;
-  var
-    Arr: TJSONArray;
-    c: integer;
-  begin
-    Arr := TJSONArray.Create;
-    for c := 0 to length(FSArr) - 1 do
-      Arr.AddElement(FSArr[c]);
-    result := TJSONObject.Create(TJSONPair.Create('arrayValue',
-      TJSONObject.Create(TJSONPair.Create('values', Arr))));
-  end;
-
 begin
   result := TJSONPair.Create(VarName, SetArrayValue(FSArr));
 end;
@@ -1752,6 +1792,30 @@ begin
     result := (Val as TJSONObject).GetArraySize
   else
     result := 0;
+end;
+
+function TJSONHelpers.GetArrayValues: TJSONObjects;
+var
+  Obj: TJSONObject;
+  Arr: TJSONArray;
+  c: integer;
+begin
+  Obj := GetValue<TJSONObject>('arrayValue');
+  if not assigned(Obj) then
+    exit(nil);
+  Arr := Obj.GetValue('values') as TJSONArray;
+  if not assigned(Arr) then
+    exit(nil);
+  SetLength(result, Arr.Count);
+  for c := 0 to Arr.Count - 1 do
+  begin
+    if not(Arr.Items[c] is TJSONObject) then
+      raise EFirestoreDocument.CreateFmt(rsArrFieldNotJSONObj, [c]);
+    Obj := Arr.Items[c] as TJSONObject;
+    if Obj.Count <> 1 then
+      raise EFirestoreDocument.CreateFmt(rsArrFieldNotTypeValue, [c]);
+    result[c] := Obj;
+  end;
 end;
 
 function TJSONHelpers.GetArrayItem(Ind: integer): TJSONObject;
@@ -1832,6 +1896,39 @@ const
 begin
   if not TypeName.IsEmpty then
     Add(cGetQueryParamOrderBy, [Format(sQuery, [TypeName])]);
+  result := self;
+end;
+
+function TQueryParamsHelper.AddOrderByAndEqualTo(const FieldName,
+  FilterValue: string): TQueryParams;
+begin
+  if not FieldName.IsEmpty then
+    Add(cGetQueryParamOrderBy,
+      ['"' + StringReplace(FieldName, '"', '""', [rfReplaceAll]) + '"']);
+  Add(cGetQueryParamEqualTo,
+    ['"' + StringReplace(FilterValue, '"', '""', [rfReplaceAll]) + '"']);
+  result := self;
+end;
+
+function TQueryParamsHelper.AddOrderByAndEqualTo(const FieldName: string;
+  FilterValue: integer): TQueryParams;
+begin
+  if not FieldName.IsEmpty then
+    Add(cGetQueryParamOrderBy,
+      ['"' + StringReplace(FieldName, '"', '""', [rfReplaceAll]) + '"']);
+  Add(cGetQueryParamEqualTo,
+    [FilterValue.ToString]);
+  result := self;
+end;
+
+function TQueryParamsHelper.AddOrderByAndEqualTo(const FieldName: string;
+  FilterValue: extended): TQueryParams;
+begin
+  if not FieldName.IsEmpty then
+    Add(cGetQueryParamOrderBy,
+      ['"' + StringReplace(FieldName, '"', '""', [rfReplaceAll]) + '"']);
+  Add(cGetQueryParamEqualTo,
+    [FilterValue.ToString]);
   result := self;
 end;
 

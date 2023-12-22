@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2022 Christoph Schneider                                 }
+{  Copyright (c) 2018-2023 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -120,7 +120,9 @@ begin
   EventName := '';
   {$ENDIF}
   fGetFinishedEvent := TEvent.Create(nil, false, false, EventName);
+  {$IFNDEF CONSOLE}
   OnTerminate := OnEndThread;
+  {$ENDIF}
   FreeOnTerminate := false;
   inc(FNoOfConcurrentThreads);
   {$IFNDEF LINUX64}

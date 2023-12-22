@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2022 Christoph Schneider                                 }
+{  Copyright (c) 2018-2023 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -142,7 +142,6 @@ constructor TRealTimeDB.Create(const ProjectID: string;
   Auth: IFirebaseAuthentication);
 begin
   inherited Create;
-  Assert(assigned(Auth), 'Authentication not initalized');
   fBaseURL := Format(GOOGLE_FIREBASE, [ProjectID]);
   fAuth := Auth;
 end;
@@ -150,7 +149,6 @@ end;
 constructor TRealTimeDB.CreateByURL(const FirebaseURL: string;
   Auth: IFirebaseAuthentication);
 begin
-  Assert(assigned(Auth), 'Authentication not initalized');
   fBaseURL := FirebaseURL;
   fAuth := Auth;
 end;
