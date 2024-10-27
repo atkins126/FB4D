@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -109,7 +109,6 @@ uses
 
 const
   VISION_API = 'https://vision.googleapis.com/v1';
-//  VISION_API = 'https://vision.googleapis.com/v1p4beta1';
 
 resourcestring
   rsFunctionCall = 'Function call %s';

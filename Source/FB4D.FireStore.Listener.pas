@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -66,6 +66,7 @@ type
     fReadPos: Int64;
     fMsgSize: integer;
     fOnStopListening: TOnStopListenEvent;
+    fOnStopListeningDeprecated: TOnStopListenEventDeprecated;
     fOnListenError: TOnRequestError;
     fOnAuthRevoked: TOnAuthRevokedEvent;
     fOnConnectionStateChange: TOnConnectionStateChange;
@@ -80,6 +81,7 @@ type
     fLastTelegramNo: integer;
     fResumeToken: string;
     fTargets: TTargets;
+    fPendingDocumentChanges: boolean;
     function GetTargetIndById(TargetID: cardinal): integer;
     function SearchForTarget(TargetKind: TTargetKind; const DocumentPath,
       QueryJSON: string; OnChangedDoc: TOnChangedDocument;
@@ -94,7 +96,9 @@ type
     procedure OnRecData(const Sender: TObject; ContentLength, ReadCount: Int64;
       var Abort: Boolean);
     procedure OnEndListenerGet(const ASyncResult: IAsyncResult);
+    {$IFNDEF CONSOLE}
     procedure OnEndThread(Sender: TObject);
+    {$ENDIF}
   protected
     procedure Execute; override;
   public
@@ -104,7 +108,12 @@ type
     procedure RegisterEvents(OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent;
       OnConnectionStateChange: TOnConnectionStateChange;
-      DoNotSynchronizeEvents: boolean);
+      DoNotSynchronizeEvents: boolean); overload;
+    procedure RegisterEvents(OnStopListening: TOnStopListenEventDeprecated;
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent;
+      OnConnectionStateChange: TOnConnectionStateChange;
+      DoNotSynchronizeEvents: boolean); overload;
+      // deprecated 'Use new version with TOnStopListenEvent'
     procedure StopListener(TimeOutInMS: integer = cDefTimeOutInMS);
     procedure StopNotStarted;
     function IsRunning: boolean;
@@ -118,6 +127,7 @@ type
     function CloneTargets: TTargets;
     procedure RestoreClonedTargets(Targets: TTargets);
     property LastReceivedMsg: TDateTime read fLastReceivedMsg;
+    property PendingDocumentChanges: boolean read fPendingDocumentChanges;
   end;
 
 implementation
@@ -139,6 +149,14 @@ const
   cCVER = '22';
   cHttpHeaders =
     'X-Goog-Api-Client:gl-js/ file(8.2.3'#13#10'Content-Type:text/plain';
+  cKeepAlive = '"noop"';
+  cClose = '"close"';
+  cDocChange = 'documentChange';
+  cDocDelete = 'documentDelete';
+  cDocRemove = 'documentRemove';
+  cTargetChange = 'targetChange';
+  cFilter = 'filter';
+  cStatusMessage = '__sm__';
 
 resourcestring
   rsEvtListenerFailed = 'Event listener failed: %s';
@@ -449,15 +467,6 @@ procedure TFSListenerThread.Interprete(const Telegram: string);
     end;
   end;
 
-const
-  cKeepAlive = '"noop"';
-  cClose = '"close"';
-  cDocChange = 'documentChange';
-  cDocDelete = 'documentDelete';
-  cDocRemove = 'documentRemove';
-  cTargetChange = 'targetChange';
-  cFilter = 'filter';
-  cStatusMessage = '__sm__';
 var
   Obj: TJsonObject;
   ObjName: string;
@@ -544,6 +553,9 @@ begin
     if not fPartialResp.IsEmpty then
       TFirebaseHelpers.Log('FSListenerThread.Rest line after SearchNextMsg: ' +
         fPartialResp);
+    if not result.IsEmpty then
+      TFirebaseHelpers.Log('FSListenerThread.SearchNextMsg: ' +
+        StringReplace(result, #10, '', [rfReplaceAll]));
     {$ENDIF}
   end else
     result := '';
@@ -561,17 +573,21 @@ procedure TFSListenerThread.Parser;
       if not Line.StartsWith('[') then
         raise EFirestoreListener.Create('Invalid telegram start: ' + Line);
       p := 2;
-      while (p < Line.Length) and (Line[p] <> ',') do
+      while (p + 2 < Line.Length) and (Line[p] <> ',') do
         inc(p);
-      if Copy(Line, p, 2) = ',[' then
+      // Handle ',' followed by '[' or '{'
+      if p + 2 >= Line.Length then
+        raise EFirestoreListener.Create('Invalid telegram received: ' + Line);
+      if Line[p + 1] = '[' then
       begin
         result := StrToIntDef(copy(Line, 2, p - 2), -1);
         Line := Copy(Line, p + 2);
       end
-      else if Copy(Line, p, 2) = ',{' then
+      else if Line[p + 1] = '{' then
       begin
         result := StrToIntDef(copy(Line, 2, p - 2), -1);
-        Line := Copy(Line, p + 1); // Take { into telegram
+        // Keep the opening curly brace
+        Line := Copy(Line, p + 1);
       end else
         raise EFirestoreListener.Create('Invalid telegram received: ' + Line);
     end;
@@ -580,6 +596,7 @@ procedure TFSListenerThread.Parser;
     var
       p, BracketLevel, BraceLevel: integer;
       InString, EndFlag: boolean;
+      Tail: string;
     begin
       Assert(Line.Length > 2, 'Too short telegram: ' + Line);
       BracketLevel := 0;
@@ -632,6 +649,11 @@ procedure TFSListenerThread.Parser;
             Line := Copy(Line, p + 1)
           else
             Line := Copy(Line, p);
+          Tail := Line + fPartialResp;
+          fPendingDocumentChanges :=
+            (pos(cDocChange, Tail) > 0) or
+            (pos(cDocDelete, Tail) > 0) or
+            (pos(cDocRemove, Tail) > 0);
           exit;
         end;
       end;
@@ -712,6 +734,7 @@ begin
   fStopWaiting := false;
   fMsgSize := -1;
   fPartialResp := '';
+  fPendingDocumentChanges := false;
   if Mode >= NewSIDRequest then
   begin
     fLastTelegramNo := 0;
@@ -985,6 +1008,26 @@ begin
   InitListen(NewListener);
   fRequestID := 'FSListener for ' + fTargets.Count.ToString + ' target(s)';
   fOnStopListening := OnStopListening;
+  fOnStopListeningDeprecated := nil;
+  fOnListenError := OnError;
+  fOnAuthRevoked := OnAuthRevoked;
+  fOnConnectionStateChange := OnConnectionStateChange;
+  fDoNotSynchronizeEvents := DoNotSynchronizeEvents;
+end;
+
+procedure TFSListenerThread.RegisterEvents(
+  OnStopListening: TOnStopListenEventDeprecated; OnError: TOnRequestError;
+  OnAuthRevoked: TOnAuthRevokedEvent;
+  OnConnectionStateChange: TOnConnectionStateChange;
+  DoNotSynchronizeEvents: boolean); // deprecated
+begin
+  if IsRunning then
+    raise EFirestoreListener.Create(
+      'RegisterEvents must not be called for started Listener');
+  InitListen(NewListener);
+  fRequestID := 'FSListener for ' + fTargets.Count.ToString + ' target(s)';
+  fOnStopListening := nil;
+  fOnStopListeningDeprecated := OnStopListening;
   fOnListenError := OnError;
   fOnAuthRevoked := OnAuthRevoked;
   fOnConnectionStateChange := OnConnectionStateChange;
@@ -994,6 +1037,8 @@ end;
 procedure TFSListenerThread.OnEndListenerGet(const ASyncResult: IAsyncResult);
 var
   Resp: IHTTPResponse;
+  Msg, MsgDetail: string;
+  c, e: integer;
 begin
   if TFirebaseHelpers.AppIsTerminated then
     exit;
@@ -1011,7 +1056,22 @@ begin
         if not fCloseRequest and
           (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
         begin
-          ReportErrorInThread(Resp.StatusText);
+          Msg := Resp.StatusText;
+          MsgDetail := resp.ContentAsString;
+          // Try to fetch more detail information from HTML page in case of error
+          c := Pos('That’s an error.', MsgDetail);
+          if c > 0 then
+          begin
+            MsgDetail := MsgDetail.Substring(c);
+            c := Pos('<p>', MsgDetail);
+            if c > 0 then
+              MsgDetail := MsgDetail.Substring(c + 2);
+            e := Pos('<', MsgDetail);
+            if e > 0 then
+              MsgDetail := MsgDetail.Substring(0, e - 1);
+            Msg := Msg + ', Details: ' + trim(MsgDetail);
+          end;
+          ReportErrorInThread(Msg);
           fCloseRequest := true;
           {$IFDEF ParserLogDetails}
           TFirebaseHelpers.Log('FSListenerThread.OnEndListenerGet Response: ' +
@@ -1051,6 +1111,7 @@ begin
   end;
 end;
 
+{$IFNDEF CONSOLE}
 procedure TFSListenerThread.OnEndThread(Sender: TObject);
 begin
   if TFirebaseHelpers.AppIsTerminated then
@@ -1059,11 +1120,18 @@ begin
     TThread.ForceQueue(nil,
       procedure
       begin
-        fOnStopListening(Sender);
+        fOnStopListening(fRequestID);
+      end)
+  else if assigned(fOnStopListeningDeprecated) then
+    TThread.ForceQueue(nil,
+      procedure
+      begin
+        fOnStopListeningDeprecated(Sender);
       end);
   if not fStopWaiting and assigned(fOnListenError) then
     fOnListenError(fRequestID, rsUnexpectedThreadEnd);
 end;
+{$ENDIF}
 
 procedure TFSListenerThread.StopListener(TimeOutInMS: integer);
 var

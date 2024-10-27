@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -46,7 +46,7 @@ type
     procedure OnPutGet(ResourceParams: TRequestResourceParam; Val: TJSONValue);
     procedure OnError(const RequestID, ErrMsg: string);
     procedure OnReceive(const Event: string; Params: TRequestResourceParam; JSONObj: TJSONObject);
-    procedure OnStop(Sender: TObject);
+    procedure OnStop(const RequestID: string);
   public
     [Setup]
     procedure Setup;
@@ -127,7 +127,7 @@ begin
   fCallBack := true;
 end;
 
-procedure UT_RealTimeDB.OnStop(Sender: TObject);
+procedure UT_RealTimeDB.OnStop(const RequestID: string);
 begin
 
 end;

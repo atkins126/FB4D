@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -67,7 +67,21 @@ const
   cRegionASSoEa2 = 'asia-southeast2';         // Jakarta
   cRegionASSoEa3 = 'asia-southeast3';         // Seoul
 
+  cGeminiAIPro1_0 = 'gemini-1.0-pro';
+  cGeminiAIPro1_5 = 'gemini-1.5-pro';
+  cGeminiAIFlash1_5 = 'gemini-1.5-flash';
+  cGeminiAIDefaultModel = cGeminiAIPro1_5;
+
 type
+  // Forward declarations
+  IFirebaseUser = interface;
+  IFirebaseResponse = interface;
+  IFirestoreDocument = interface;
+  IFirestoreDocuments = interface;
+  IStorageObject = interface;
+  IVisionMLResponse = interface;
+  IGeminiAIResponse = interface;
+
   /// <summary>
   /// Firebase returns timestamps in UTC time zone (tzUTC). FB4D offers the
   /// or convertion into local time by tzLocalTime.
@@ -79,75 +93,244 @@ type
   /// </summary>
   EFirebaseResponse = class(Exception);
 
-  IFirebaseUser = interface;
-  IFirebaseResponse = interface;
-  IFirestoreDocument = interface;
-  IFirestoreDocuments = interface;
-  IStorageObject = interface;
-
+  /// <summary>
+  /// Event handler type for request errors.
+  /// This event is triggered when a Firebase request encounters an error.
+  /// </summary>
+  /// <param name="RequestID">The unique identifier of the request that failed.</param>
+  /// <param name="ErrMsg">The error message describing the reason for failure.</param>
   TOnRequestError = procedure(const RequestID, ErrMsg: string) of object;
+
+  /// <summary>
+  /// Type alias for a dynamic array of strings representing resource parameters for a request.
+  /// Each string in the array represents a segment of the resource path.
+  /// </summary>
   TRequestResourceParam = TStringDynArray;
+
+  /// <summary>
+  /// Event handler type for successful Firebase responses.
+  /// This event is triggered when a Firebase request completes successfully.
+  /// </summary>
+  /// <param name="RequestID">The unique identifier of the successful request.</param>
+  /// <param name="Response">The IFirebaseResponse object containing the response data.</param>
   TOnFirebaseResp = procedure(const RequestID: string;
     Response: IFirebaseResponse) of object;
 
+  /// <summary>
+  /// Represents a list of IFirebaseUser objects.
+  /// </summary>
   TFirebaseUserList = TList<IFirebaseUser>;
-  TPasswordVerificationResult = (pvrOpNotAllowed, pvrPassed, pvrpvrExpired,
-    pvrInvalid);
+
+  /// <summary>
+  /// Enumerates the possible results of a password verification operation.
+  /// </summary>
+  TPasswordVerificationResult = (
+    pvrOpNotAllowed, ///< The operation is not allowed.
+    pvrPassed, ///< The password verification was successful.
+    pvrExpired, ///< The password has expired.
+    pvrInvalid ///< The provided password is invalid.
+  );
+
+  /// <summary>
+  /// Event handler type for user-related responses.
+  /// This event is triggered when a user operation completes.
+  /// </summary>
+  /// <param name="Info">Additional information about the response.</param>
+  /// <param name="User">The IFirebaseUser object representing the user.</param>
   TOnUserResponse = procedure(const Info: string; User: IFirebaseUser) of object;
-  TOnFetchProviders = procedure(const RequestID: string; IsRegistered: boolean;
-    Providers: TStrings) of object;
-  TOnPasswordVerification = procedure(const Info: string;
-    Result: TPasswordVerificationResult) of object;
+
+  /// <summary>
+  /// Event handler type for fetching authentication providers.
+  /// This event is triggered when the list of available authentication providers is retrieved.
+  /// </summary>
+  /// <param name="RequestID">The unique identifier of the request.</param>
+  /// <param name="IsRegistered">Indicates whether the user is already registered.</param>
+  /// <param name="Providers">A TStrings object containing the list of available providers.</param>
+  TOnFetchProviders = procedure(const RequestID: string; IsRegistered: boolean; Providers: TStrings) of object;
+
+  /// <summary>
+  /// Event handler type for password verification results.
+  /// This event is triggered when a password verification operation completes.
+  /// </summary>
+  /// <param name="Info">Additional information about the response.</param>
+  /// <param name="Result">The result of the password verification operation.</param>
+  TOnPasswordVerification = procedure(const Info: string; Result: TPasswordVerificationResult) of object;
+
+  /// <summary>
+  /// Event handler type for retrieving user data.
+  /// This event is triggered when the user data is successfully retrieved.
+  /// </summary>
+  /// <param name="FirebaseUserList">A TFirebaseUserList containing the retrieved user data.</param>
   TOnGetUserData = procedure(FirebaseUserList: TFirebaseUserList) of object;
+
+  /// <summary>
+  /// Event handler type for token refresh operations.
+  /// This event is triggered when a token refresh operation completes.
+  /// </summary>
+  /// <param name="TokenRefreshed">Indicates whether the token was successfully refreshed.</param>
   TOnTokenRefresh = procedure(TokenRefreshed: boolean) of object;
 
-  TOnRTDBValue = procedure(ResourceParams: TRequestResourceParam;
-    Val: TJSONValue) of object;
-  TOnRTDBDelete = procedure(Params: TRequestResourceParam; Success: boolean)
-    of object;
-  TOnRTDBServerVariable = procedure(const ServerVar: string; Val: TJSONValue)
-    of object;
+  /// <summary>
+  /// Event handler type for Realtime Database value changes.
+  /// This event is triggered when the value of a specific resource in the database changes.
+  /// </summary>
+  /// <param name="ResourceParams">Parameters of the resource whose value changed.</param>
+  /// <param name="Val">The new JSON value of the resource.</param>
+  TOnRTDBValue = procedure(ResourceParams: TRequestResourceParam; Val: TJSONValue) of object;
 
-  TOnDocument = procedure(const Info: string;
-    Document: IFirestoreDocument) of object;
-  TOnDocuments = procedure(const Info: string;
-    Documents: IFirestoreDocuments) of object;
+  /// <summary>
+  /// Event handler type for Realtime Database delete operations.
+  /// This event is triggered when a delete operation on a resource in the database completes.
+  /// </summary>
+  /// <param name="Params">Parameters of the resource that was deleted.</param>
+  /// <param name="Success">Indicates whether the delete operation was successful.</param>
+  TOnRTDBDelete = procedure(Params: TRequestResourceParam; Success: boolean) of object;
+
+  /// <summary>
+  /// Event handler type for Realtime Database server variable changes.
+  /// This event is triggered when the value of a server variable in the database changes.
+  /// </summary>
+  /// <param name="ServerVar">The name of the server variable that changed.</param>
+  /// <param name="Val">The new JSON value of the server variable.</param>
+  TOnRTDBServerVariable = procedure(const ServerVar: string; Val: TJSONValue) of object;
+
+  /// <summary>
+  /// Event handler type for receiving a single Firestore document.
+  /// </summary>
+  /// <param name="Info">Additional information about the document retrieval.</param>
+  /// <param name="Document">The retrieved Firestore document.</param>
+  TOnDocument = procedure(const Info: string; Document: IFirestoreDocument) of object;
+
+  /// <summary>
+  /// Event handler type for receiving multiple Firestore documents.
+  /// </summary>
+  /// <param name="Info">Additional information about the document retrieval.</param>
+  /// <param name="Documents">The retrieved Firestore documents.</param>
+  TOnDocuments = procedure(const Info: string; Documents: IFirestoreDocuments) of object;
+
+  /// <summary>
+  /// Event handler type for receiving a changed Firestore document.
+  /// </summary>
+  /// <param name="ChangedDocument">The changed Firestore document.</param>
   TOnChangedDocument = procedure(ChangedDocument: IFirestoreDocument) of object;
-  TOnDeletedDocument = procedure(const DeleteDocumentPath: string;
-    TimeStamp: TDateTime) of object;
-  TFirestoreReadTransaction = string; // A base64 encoded ID
-  TOnBeginReadTransaction = procedure(Transaction: TFirestoreReadTransaction)
-    of object;
+
+  /// <summary>
+  /// Event handler type for receiving a deleted Firestore document.
+  /// </summary>
+  /// <param name="DeleteDocumentPath">The path of the deleted document.</param>
+  /// <param name="TimeStamp">The timestamp of the deletion.</param>
+  TOnDeletedDocument = procedure(const DeleteDocumentPath: string; TimeStamp: TDateTime) of object;
+
+  /// <summary>
+  /// Type representing a Firestore read transaction ID, encoded in Base64.
+  /// </summary>
+  TFirestoreReadTransaction = string;
+
+  /// <summary>
+  /// Event handler type for the beginning of a Firestore read transaction.
+  /// </summary>
+  /// <param name="Transaction">The ID of the started read transaction.</param>
+  TOnBeginReadTransaction = procedure(Transaction: TFirestoreReadTransaction) of object;
+
+  /// <summary>
+  /// Interface representing a committed Firestore write transaction.
+  /// </summary>
   IFirestoreCommitTransaction = interface
+    /// <summary>
+    /// Returns the commit time of the transaction in the specified time zone.
+    /// </summary>
+    /// <param name="TimeZone">Either the local time zone or UTC for the commit time (default is UTC).</param>
+    /// <returns>The commit time of the transaction.</returns>
     function CommitTime(TimeZone: TTimeZone = tzUTC): TDateTime;
+
+    /// <summary>
+    /// Returns the number of updates performed in the transaction.
+    /// </summary>
+    /// <returns>The number of updates in the transaction.</returns>
     function NoUpdates: cardinal;
+
+    /// <summary>
+    /// Returns the update time of the specified update within the transaction.
+    /// </summary>
+    /// <param name="Index">The index of the update (zero-based).</param>
+    /// <param name="TimeZone">Either the local time zone or UTC for the update time (default is UTC).</param>
+    /// <returns>The update time of the specified update.</returns>
     function UpdateTime(Index: cardinal; TimeZone: TTimeZone = tzUTC): TDateTime;
   end;
-  TOnCommitWriteTransaction = procedure(Transaction: IFirestoreCommitTransaction)
-    of object;
 
+  /// <summary>
+  /// Event handler type for the successful commit of a Firestore write transaction.
+  /// </summary>
+  /// <param name="Transaction">Information about the committed transaction.</param>
+  TOnCommitWriteTransaction = procedure(Transaction: IFirestoreCommitTransaction) of object;
+
+  /// <summary>
+  /// Type representing the name of an object in the Cloud Storage.
+  /// </summary>
   TObjectName = string;
+
+  /// <summary>
+  /// Event handler type for successful storage operations.
+  /// </summary>
+  /// <param name="Obj">The storage object involved in the operation.</param>
   TOnStorage = procedure(Obj: IStorageObject) of object;
-  TOnStorageDeprecated = procedure(const ObjectName: TObjectName;
-    Obj: IStorageObject) of object;
-  TOnStorageError = procedure(const ObjectName: TObjectName;
-    const ErrMsg: string) of object;
+  /// <summary>
+  /// Deprecated event handler type for successful storage operations. Don't use it for new projects anymore.
+  /// Use TOnStorage instead.
+  /// </summary>
+  TOnStorageDeprecated = procedure(const ObjectName: TObjectName; Obj: IStorageObject) of object;
+
+  /// <summary>
+  /// Event handler type for errors during storage operations.
+  /// </summary>
+  /// <param name="ObjectName">The name of the object involved in the error.</param>
+  /// <param name="ErrMsg">The error message.</param>
+  TOnStorageError = procedure(const ObjectName: TObjectName; const ErrMsg: string) of object;
+
+  /// <summary>
+  /// Event handler type for successful deletion of a storage object.
+  /// </summary>
+  /// <param name="ObjectName">The name of the deleted object.</param>
   TOnDeleteStorage = procedure(const ObjectName: TObjectName) of object;
 
-  TOnFunctionSuccess = procedure(const Info: string; ResultObj: TJSONObject) of
-    object;
+  /// <summary>
+  /// Event handler type for successful function execution in Cloud Functions.
+  /// </summary>
+  /// <param name="Info">Additional information about the function execution.</param>
+  /// <param name="ResultObj">The result of the function execution as a JSON object.</param>
+  TOnFunctionSuccess = procedure(const Info: string; ResultObj: TJSONObject) of object;
 
-  IVisionMLResponse = interface;
-
+  /// <summary>
+  /// Event handler signature for receiving annotation results from a Vision ML API call.
+  /// </summary>
+  /// <param name="Res">The IVisionMLResponse object containing the annotation results.</param>
   TOnAnnotate = procedure(Res: IVisionMLResponse) of object;
 
+  /// <summary>
+  /// Event handler signature for receiving generated content from a Gemini AI API call.
+  /// </summary>
+  /// <param name="Response">The IGeminiAIResponse object containing the generated content.</param>
+  TOnGeminiGenContent = procedure(Response: IGeminiAIResponse) of object;
+
+  /// <summary>
+  /// Event handler signature for receiving token count information from a Gemini AI API call.
+  /// </summary>
+  /// <param name="PromptToken">The number of tokens in the prompt.</param>
+  /// <param name="CachedContentToken">The number of tokens in the cached content (if any).</param>
+  /// <param name="ErrorMsg">An error message if the token count operation failed.</param>
+  TOnGeminiCountToken = procedure(PromptToken, CachedContentToken: integer; const ErrorMsg: string) of object;
+
+  {$REGION 'Internaly used OnSuccess Structure'}
   TOnSuccess = record
-    type TOnSuccessCase = (oscUndef, oscFB, oscUser, oscFetchProvider,
-      oscPwdVerification, oscGetUserData, oscRefreshToken, oscRTDBValue,
-      oscRTDBDelete, oscRTDBServerVariable, oscDocument, oscDocuments,
+    type TOnSuccessCase = (oscUndef,
+      oscFB, oscUser, oscFetchProvider, oscPwdVerification, oscGetUserData, oscRefreshToken,
+      oscRTDBValue, oscRTDBDelete, oscRTDBServerVariable,
+      oscDocument, oscDocuments,
       oscDocumentDeleted, oscBeginReadTransaction, oscCommitWriteTransaction,
-      oscStorage, oscStorageDeprecated, oscStorageUpload, oscStorageGetAndDown,
-      oscDelStorage, oscFunctionSuccess, oscVisionML);
+      oscStorage, oscStorageDeprecated, oscStorageUpload, oscStorageGetAndDown, oscDelStorage,
+      oscFunctionSuccess,
+      oscVisionML,
+      oscGeminiGenContent, oscGeminiCountToken);
     constructor Create(OnResp: TOnFirebaseResp);
     constructor CreateUser(OnUserResp: TOnUserResponse);
     constructor CreateFetchProviders(OnFetchProvidersResp: TOnFetchProviders);
@@ -175,6 +358,8 @@ type
     constructor CreateDelStorage(OnDelStorageResp: TOnDeleteStorage);
     constructor CreateFunctionSuccess(OnFunctionSuccessResp: TOnFunctionSuccess);
     constructor CreateVisionML(OnAnnotateResp: TOnAnnotate);
+    constructor CreateGeminiGenerateContent(OnGeminiGenContent: TOnGeminiGenContent);
+    constructor CreateGeminiCountToken(OnGeminiCountToken: TOnGeminiCountToken);
     {$IFNDEF AUTOREFCOUNT}
     case OnSuccessCase: TOnSuccessCase of
       oscFB: (OnResponse: TOnFirebaseResp);
@@ -204,6 +389,8 @@ type
       oscDelStorage: (OnDelStorage: TOnDeleteStorage);
       oscFunctionSuccess: (OnFunctionSuccess: TOnFunctionSuccess);
       oscVisionML: (OnAnnotate: TOnAnnotate);
+      oscGeminiGenContent: (OnGenerateContent: TOnGeminiGenContent);
+      oscGeminiCountToken: (OnCountToken: TOnGeminiCountToken);
     {$ELSE}
     var
       OnSuccessCase: TOnSuccessCase;
@@ -231,9 +418,16 @@ type
       OnDelStorage: TOnDeleteStorage;
       OnFunctionSuccess: TOnFunctionSuccess;
       OnAnnotate: TOnAnnotate;
+      OnGenerateContent: TOnGeminiGenContent;
+      OnCountToken: TOnGeminiCountToken;
     {$ENDIF}
   end;
 
+  TOnRequestErrorWithOnSuccess = procedure(const RequestID, ErrMsg: string;
+    OnSuccess: TOnSuccess) of object;
+  {$ENDREGION}
+
+  {$REGION 'General used Firebase Response'}
   /// <summary>
   /// Interface for handling REST response from all Firebase Services
   /// </summary>
@@ -255,11 +449,16 @@ type
     function GetServerTime(TimeZone: TTimeZone): TDateTime;
     function GetOnSuccess: TOnSuccess;
     function GetOnError: TOnRequestError;
+    function GetOnErrorWithSuccess: TOnRequestErrorWithOnSuccess;
     function HeaderValue(const HeaderName: string): string;
     property OnSuccess: TOnSuccess read GetOnSuccess;
     property OnError: TOnRequestError read GetOnError;
+    property OnErrorWithSuccess: TOnRequestErrorWithOnSuccess
+      read GetOnErrorWithSuccess;
    end;
+  {$ENDREGION}
 
+  {$REGION 'General used Firebase Request'}
   TQueryParams = TDictionary<string, TStringDynArray>;
   TTokenMode = (tmNoToken, tmBearer, tmAuthParam);
   IFirebaseRequest = interface;
@@ -270,9 +469,19 @@ type
       OnResponse: TOnFirebaseResp; OnRequestError: TOnRequestError;
       OnSuccess: TOnSuccess); overload;
     procedure SendRequest(ResourceParams: TRequestResourceParam;
+      Method: TRESTRequestMethod; Data: TJSONValue;
+      QueryParams: TQueryParams; TokenMode: TTokenMode;
+      OnResponse: TOnFirebaseResp; OnRequestErrorWithOnSuccess: TOnRequestErrorWithOnSuccess;
+      OnSuccess: TOnSuccess); overload;
+    procedure SendRequest(ResourceParams: TRequestResourceParam;
       Method: TRESTRequestMethod; Data: TStream; ContentType: TRESTContentType;
       QueryParams: TQueryParams; TokenMode: TTokenMode;
       OnResponse: TOnFirebaseResp; OnRequestError: TOnRequestError;
+      OnSuccess: TOnSuccess); overload;
+    procedure SendRequest(ResourceParams: TRequestResourceParam;
+      Method: TRESTRequestMethod; Data: TStream; ContentType: TRESTContentType;
+      QueryParams: TQueryParams; TokenMode: TTokenMode;
+      OnResponse: TOnFirebaseResp; OnRequestErrorWithOnSuccess: TOnRequestErrorWithOnSuccess;
       OnSuccess: TOnSuccess); overload;
     function SendRequestSynchronous(ResourceParams: TRequestResourceParam;
       Method: TRESTRequestMethod; Data: TJSONValue = nil;
@@ -283,7 +492,9 @@ type
       QueryParams: TQueryParams = nil; TokenMode: TTokenMode = tmBearer):
       IFirebaseResponse; overload;
   end;
+  {$ENDREGION}
 
+  {$REGION 'Firebase Realtime DB'}
   IFirebaseEvent = interface(IInterface)
     procedure StopListening(MaxTimeOutInMS: cardinal = 500); overload;
     procedure StopListening(const NodeName: string;
@@ -295,12 +506,14 @@ type
 
   TOnReceiveEvent = procedure(const Event: string;
     Params: TRequestResourceParam; JSONObj: TJSONObject) of object;
-  TOnStopListenEvent = TNotifyEvent;
+  TOnStopListenEvent =  procedure(const RequestId: string) of object;
+  TOnStopListenEventDeprecated = TNotifyEvent;
   TOnAuthRevokedEvent = procedure(TokenRenewPassed: boolean) of object;
   TOnConnectionStateChange = procedure(ListenerConnected: boolean) of object;
   ERTDBListener = class(Exception);
 
   IRealTimeDB = interface(IInterface)
+    function GetDatabaseID: string;
     procedure Get(ResourceParams: TRequestResourceParam;
       OnGetValue: TOnRTDBValue; OnRequestError: TOnRequestError;
       QueryParams: TQueryParams = nil);
@@ -337,7 +550,14 @@ type
       ListenEvent: TOnReceiveEvent; OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
       OnConnectionStateChange: TOnConnectionStateChange = nil;
-      DoNotSynchronizeEvents: boolean = false): IFirebaseEvent;
+      DoNotSynchronizeEvents: boolean = false): IFirebaseEvent; overload;
+    function ListenForValueEvents(ResourceParams: TRequestResourceParam;
+      ListenEvent: TOnReceiveEvent;
+      OnStopListening: TOnStopListenEventDeprecated;
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
+      DoNotSynchronizeEvents: boolean = false): IFirebaseEvent; overload;
+      deprecated 'Use new version with TOnStopListenEvent';
     // To retrieve server variables like timestamp and future variables
     procedure GetServerVariables(const ServerVarName: string;
       ResourceParams: TRequestResourceParam;
@@ -346,12 +566,23 @@ type
     function GetServerVariablesSynchronous(const ServerVarName: string;
       ResourceParams: TRequestResourceParam): TJSONValue;
   end;
+  {$ENDREGION}
 
+  {$REGION 'Firestore Database'}
   EFirestoreDocument = class(Exception);
   TJSONObjects = array of TJSONObject;
   TFirestoreFieldType = (fftNull, fftBoolean, fftInteger, fftDouble,
     fftTimeStamp, fftString, fftBytes, fftReference, fftGeoPoint, fftArray,
     fftMap);
+  TOTDMapperOption = (
+    omSupressSaveDefVal, // Don't save empty string, integer with value 0, etc..
+    omSupressSavePrivateFields,   // Don't save private fields
+    omSupressSaveProtectedFields, // Don't save protected fields
+    omSupressSavePublicFields,    // Don't save public fields
+    omSupressSavePublishedFields, // Don't save published fields
+    omEliminateFieldPrefixF,      // Eliminate F and f as field prefix
+    omSaveEnumAsString);          // Convert Enum to string instead of ord number
+  TOTDMapperOptions = Set of TOTDMapperOption;
   IFirestoreDocument = interface(IInterface)
     function DocumentName(FullPath: boolean): string;
     function DocumentFullPath: TRequestResourceParam;
@@ -410,6 +641,8 @@ type
       Val: TJSONValue): IFirestoreDocument; overload;
     function AsJSON: TJSONObject;
     function Clone: IFirestoreDocument;
+    function SaveObjectToDocument(
+      Options: TOTDMapperOptions = []): IFirestoreDocument;
     property Fields[Index: integer]: TJSONObject read FieldValue;
   end;
 
@@ -424,7 +657,8 @@ type
   end;
 
   TWhereOperator = (woUnspecific, woLessThan, woLessThanOrEqual,
-    woGreaterThan, woGreaterThanOrEqual, woEqual, woArrayContains);
+    woGreaterThan, woGreaterThanOrEqual, woEqual, woNotEqual, woArrayContains,
+    woInArray, woArrayContainsAny, woNotInArray);
   IQueryFilter = interface(IInterface)
     procedure AddPair(const Str: string; Val: TJSONValue); overload;
     procedure AddPair(const Str, Val: string); overload;
@@ -459,11 +693,23 @@ type
     function HasEndAt: boolean;
   end;
 
+  IFirestoreDocTransform = interface
+    function SetServerTime(const FieldName: string): IFirestoreDocTransform;
+    function Increment(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
+    function Maximum(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
+    function Minimum(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
+  end;
+
   IFirestoreWriteTransaction = interface
     function NumberOfTransactions: cardinal;
     procedure UpdateDoc(Document: IFirestoreDocument);
     procedure PatchDoc(Document: IFirestoreDocument;
       UpdateMask: TStringDynArray);
+    procedure TransformDoc(const FullDocumentName: string;
+      Transform: IFirestoreDocTransform);
     procedure DeleteDoc(const DocumentFullPath: string);
   end;
 
@@ -473,6 +719,7 @@ type
   IFirestoreDatabase = interface(IInterface)
     function GetProjectID: string;
     function GetDatabaseID: string;
+
     procedure RunQuery(StructuredQuery: IStructuredQuery;
       OnDocuments: TOnDocuments; OnRequestError: TOnRequestError;
       QueryParams: TQueryParams = nil); overload;
@@ -485,54 +732,59 @@ type
     function RunQuerySynchronous(DocumentPath: TRequestResourceParam;
       StructuredQuery: IStructuredQuery;
       QueryParams: TQueryParams = nil): IFirestoreDocuments; overload;
+
     procedure Get(Params: TRequestResourceParam; QueryParams: TQueryParams;
       OnDocuments: TOnDocuments; OnRequestError: TOnRequestError);
     function GetSynchronous(Params: TRequestResourceParam;
       QueryParams: TQueryParams = nil): IFirestoreDocuments;
     function GetAndAddSynchronous(var Docs: IFirestoreDocuments;
       Params: TRequestResourceParam; QueryParams: TQueryParams = nil): boolean;
+
     procedure CreateDocument(DocumentPath: TRequestResourceParam;
       QueryParams: TQueryParams; OnDocument: TOnDocument;
       OnRequestError: TOnRequestError);
     function CreateDocumentSynchronous(DocumentPath: TRequestResourceParam;
       QueryParams: TQueryParams = nil): IFirestoreDocument;
+
     procedure InsertOrUpdateDocument(DocumentPath: TRequestResourceParam;
       Document: IFirestoreDocument; QueryParams: TQueryParams;
       OnDocument: TOnDocument; OnRequestError: TOnRequestError); overload;
-      deprecated 'Use method without DocumentPath and overtake full path in document';
     procedure InsertOrUpdateDocument(Document: IFirestoreDocument;
       QueryParams: TQueryParams; OnDocument: TOnDocument;
       OnRequestError: TOnRequestError); overload;
     function InsertOrUpdateDocumentSynchronous(
       DocumentPath: TRequestResourceParam; Document: IFirestoreDocument;
       QueryParams: TQueryParams = nil): IFirestoreDocument; overload;
-      deprecated 'Use method without DocumentPath and overtake full path in document';
     function InsertOrUpdateDocumentSynchronous(Document: IFirestoreDocument;
       QueryParams: TQueryParams = nil): IFirestoreDocument; overload;
+
     procedure PatchDocument(DocumentPath: TRequestResourceParam;
       DocumentPart: IFirestoreDocument; UpdateMask: TStringDynArray;
       OnDocument: TOnDocument; OnRequestError: TOnRequestError;
       Mask: TStringDynArray = []); overload;
-      deprecated 'Use method without DocumentPath and overtake full path in document';
     procedure PatchDocument(DocumentPart: IFirestoreDocument;
       UpdateMask: TStringDynArray; OnDocument: TOnDocument;
       OnRequestError: TOnRequestError; Mask: TStringDynArray = []); overload;
     function PatchDocumentSynchronous(DocumentPath: TRequestResourceParam;
       DocumentPart: IFirestoreDocument; UpdateMask: TStringDynArray;
       Mask: TStringDynArray = []): IFirestoreDocument; overload;
-      deprecated 'Use method without DocumentPath and overtake full path in document';
     function PatchDocumentSynchronous(DocumentPart: IFirestoreDocument;
       UpdateMask: TStringDynArray;
       Mask: TStringDynArray = []): IFirestoreDocument; overload;
+
+    // QueryParams: can contain as precondition a JSON object with one field
+    // named either as "exists" or "updateTime". Read more at:
+    // https://firebase.google.com/docs/firestore/reference/rest/v1/Precondition
+    procedure Delete(Params: TRequestResourceParam; QueryParams: TQueryParams;
+      OnDeletedDoc: TOnDeletedDocument; OnError: TOnRequestError);
+      overload;
     procedure Delete(Params: TRequestResourceParam; QueryParams: TQueryParams;
       OnDeleteResponse: TOnFirebaseResp; OnRequestError: TOnRequestError);
       overload;
       deprecated 'Use method with TOnDeletedDocument call back method';
-    procedure Delete(Params: TRequestResourceParam; QueryParams: TQueryParams;
-      OnDeletedDoc: TOnDeletedDocument; OnError: TOnRequestError);
-      overload;
     function DeleteSynchronous(Params: TRequestResourceParam;
       QueryParams: TQueryParams = nil): IFirebaseResponse;
+
     // Listener subscription
     function SubscribeDocument(DocumentPath: TRequestResourceParam;
       OnChangedDoc: TOnChangedDocument;
@@ -545,9 +797,16 @@ type
     procedure StartListener(OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
       OnConnectionStateChange: TOnConnectionStateChange = nil;
-      DoNotSynchronizeEvents: boolean = false);
+      DoNotSynchronizeEvents: boolean = false); overload;
+    procedure StartListener(OnStopListening: TOnStopListenEventDeprecated;
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
+      DoNotSynchronizeEvents: boolean = false); overload;
+      deprecated 'Use new version with TOnStopListenEvent';
     procedure StopListener(RemoveAllSubscription: boolean = true);
     function GetTimeStampOfLastAccess: TDateTime; // local time
+    function CheckListenerHasUnprocessedDocuments: boolean;
+
     // Transaction
     procedure BeginReadTransaction(
       OnBeginReadTransaction: TOnBeginReadTransaction;
@@ -559,9 +818,15 @@ type
     procedure CommitWriteTransaction(Transaction: IFirestoreWriteTransaction;
       OnCommitWriteTransaction: TOnCommitWriteTransaction;
       OnRequestError: TOnRequestError);
+
     property ProjectID: string read GetProjectID;
     property DatabaseID: string read GetDatabaseID;
+    property ListenerHasUnprocessedDocuments: boolean
+      read CheckListenerHasUnprocessedDocuments;
   end;
+  {$ENDREGION}
+
+  {$REGION 'Firebase Authentication'}
 
 {$IFDEF TOKENJWT}
   ETokenJWT = class(Exception);
@@ -715,6 +980,8 @@ type
     // Token refresh
     procedure RefreshToken(OnTokenRefresh: TOnTokenRefresh;
       OnError: TOnRequestError); overload;
+    procedure RefreshToken(OnTokenRefresh: TOnTokenRefresh;
+      OnErrorWithOnSuccess: TOnRequestErrorWithOnSuccess); overload;
     procedure RefreshToken(const LastRefreshToken: string;
       OnTokenRefresh: TOnTokenRefresh; OnError: TOnRequestError); overload;
     function CheckAndRefreshTokenSynchronous(
@@ -733,7 +1000,9 @@ type
     function GetTokenRefreshCount: cardinal;
     function GetLastServerTime(TimeZone: TTimeZone = tzLocalTime): TDateTime;
   end;
+  {$ENDREGION}
 
+  {$REGION 'Cloud Functions'}
   EFirebaseFunctions = class(Exception);
   IFirebaseFunctions = interface(IInterface)
     procedure CallFunction(OnSuccess: TOnFunctionSuccess;
@@ -742,7 +1011,9 @@ type
     function CallFunctionSynchronous(const FunctionName: string;
       Params: TJSONObject = nil): TJSONObject;
   end;
+  {$ENDREGION}
 
+  {$REGION 'Cloud Storage'}
   TOnDownload = procedure(Obj: IStorageObject) of object;
   TOnDownloadDeprecated = procedure(const ObjectName: TObjectName;
     Obj: IStorageObject) of object;
@@ -808,7 +1079,9 @@ type
     function CacheUsageInPercent: extended;
     function IsCacheOverflowed: boolean;
   end;
+  {$ENDREGION}
 
+  {$REGION 'Vision ML'}
   TVisionMLFeature = (vmlUnspecific, vmlFaceDetection, vmlLandmarkDetection,
     vmlLogoDetection, vmlLabelDetection, vmlTextDetection, vmlDocTextDetection,
     vmlSafeSearchDetection, vmlImageProperties, vmlCropHints, vmlWebDetection,
@@ -861,29 +1134,494 @@ type
       MaxResultsPerFeature: integer = 50;
       Model: TVisionModel = vmStable);
   end;
+  {$ENDREGION}
+
+  {$REGION 'Gemini AI'}
+
+  /// <summary>
+  /// Holds metadata about the usage of the Gemini AI API.
+  /// </summary>
+  TGeminiAIUsageMetaData = record
+
+    /// <summary>
+    /// The number of tokens used in the prompt.
+    /// </summary>
+    PromptTokenCount: integer;
+
+    /// <summary>
+    /// The number of tokens generated in the response (CandidatesTokenCount).
+    /// </summary>
+    GeneratedTokenCount: integer;
+
+    /// <summary>
+    /// The total number of tokens used (prompt + generated).
+    /// </summary>
+    TotalTokenCount: integer;
+
+    /// <summary>
+    /// Initializes the metadata record with default values.
+    /// </summary>
+    procedure Init;
+  end;
+
+  /// <summary>
+  /// Enumerates the possible states of a Gemini AI result.
+  /// </summary>
+  TGeminiAIResultState = (
+    grsUnknown,       // The result state is unknown.
+    grsTransmitError,  // An error occurred during transmission.
+    grsParseError,     // An error occurred while parsing the response.
+    grsValid,          // The result is valid.
+    grsBlockedBySafety, // The result was blocked by the safety system.
+    grsBlockedbyOtherReason // The result was blocked for another reason.
+  );
+
+  /// <summary>
+  /// Enumerates the possible reasons for a Gemini AI generation to finish.
+  /// </summary>
+  TGeminiAIFinishReason = (
+    gfrUnknown,      // The finish reason is unknown.
+    gfrStop,         // The generation reached a natural stopping point.
+    gfrMaxToken,     // The generation reached the maximum token limit.
+    gfrSafety,       // The generation was stopped for safety reasons.
+    gfrRecitation,   // The generation was flagged as potential recitation of existing content.
+    gfrOther         // The generation finished for another reason.
+  );
+
+  /// <summary>
+  /// A set of TGeminiAIFinishReason values when getting more than one candidate.
+  /// </summary>
+  TGeminiAIFinishReasons = set of TGeminiAIFinishReason;
+
+  /// <summary>
+  /// Enumerates the different categories of potential harm in AI-generated content.
+  /// </summary>
+  THarmCategory = (
+    hcUnspecific,         // Unspecified harm category.
+    hcHateSpeech,        // Hate speech.
+    hcHarassment,         // Harassment.
+    hcSexuallyExplicit,   // Sexually explicit content.
+    hcDangerousContent,   // Dangerous content.
+    hcCivicIntegrity,     // Content that undermines civic integrity.
+    hcDangerous,          // Dangerous content.
+    hcMedicalAdvice,      // Unsolicited medical advice.
+    hcSexual,             // Sexual content.
+    hcViolence,           // Violent content.
+    hcToxicity,           // Toxic or abusive language.
+    hcDerogatory          // Derogatory or offensive language.
+  );
+
+  /// <summary>
+  /// Enumerates the levels of probability and severity for a safety rating.
+  /// </summary>
+  TProbabilityAndSeverity = (
+    psUnknown,     // Unknown probability or severity.
+    psNEGLIGIBLE, // Negligible probability or severity.
+    psLOW,         // Low probability or severity.
+    psMEDIUM,      // Medium probability or severity.
+    psHIGH         // High probability or severity.
+  );
+
+  /// <summary>
+  /// Holds information about the safety rating of a Gemini AI result.
+  /// </summary>
+  TSafetyRating = record
+
+    /// <summary>
+    /// The probability level of the harm category.
+    /// </summary>
+    Probability: TProbabilityAndSeverity;
+
+    /// <summary>
+    /// The probability score (typically a value between 0 and 1).
+    /// </summary>
+    ProbabilityScore: extended;
+
+    /// <summary>
+    /// The severity level of the harm category.
+    /// </summary>
+    Severity: TProbabilityAndSeverity;
+
+    /// <summary>
+    /// The severity score (typically a value between 0 and 1).
+    /// </summary>
+    SeverityScore: extended;
+
+    /// <summary>
+    /// Initializes the safety rating record with default values.
+    /// </summary>
+    procedure Init;
+
+    /// <summary>
+    /// Returns the probability level as a string.
+    /// </summary>
+    function ProbabilityAsStr: string;
+
+    /// <summary>
+    /// Returns the severity level as a string.
+    /// </summary>
+    function SeverityAsStr: string;
+  end;
+
+  /// <summary>
+  /// Represents a single result from a Gemini AI generation.
+  /// </summary>
+  TGeminiAIResult = record
+
+    /// <summary>
+    /// The reason why the generation finished.
+    /// </summary>
+    FinishReason: TGeminiAIFinishReason;
+
+    /// <summary>
+    /// The index of the result within the response.
+    /// </summary>
+    Index: integer;
+
+    /// <summary>
+    /// An array of strings representing the generated text, split into parts.
+    /// </summary>
+    PartText: array of string;
+
+    /// <summary>
+    /// An array of safety ratings for each harm category.
+    /// </summary>
+    SafetyRatings: array [THarmCategory] of TSafetyRating;
+
+    /// <summary>
+    /// Returns the result text formatted as Markdown.
+    /// </summary>
+    function ResultAsMarkDown: string;
+
+    /// <summary>
+    /// Returns the finish reason as a string.
+    /// </summary>
+    function FinishReasonAsStr: string;
+  end;
+
+  /// <summary>
+  /// Interface representing a response from the Gemini AI API.
+  /// </summary>
+  IGeminiAIResponse = interface(IInterface)
+    /// <summary>
+    /// Returns the raw JSON response from the API.
+    /// </summary>
+    function FormatedJSON: string;
+
+    /// <summary>
+    /// Returns the number of results (candidates) in the response.
+    /// </summary>
+    function NumberOfResults: integer;
+
+    /// <summary>
+    /// Returns the TGeminiAIResult object at the specified index.
+    /// </summary>
+    function EvalResult(ResultIndex: integer): TGeminiAIResult;
+
+    /// <summary>
+    /// Returns the usage metadata for the request.
+    /// </summary>
+    function UsageMetaData: TGeminiAIUsageMetaData;
+
+    /// <summary>
+    /// Returns the overall state of the result.
+    /// </summary>
+    function ResultState: TGeminiAIResultState;
+
+    /// <summary>
+    /// Returns the result state as a string.
+    /// </summary>
+    function ResultStateStr: string;
+
+    /// <summary>
+    /// Returns the set of finish reasons for the generation.
+    /// </summary>
+    function FinishReasons: TGeminiAIFinishReasons;
+
+    /// <summary>
+    /// Returns the finish reasons as a comma-separated string.
+    /// </summary>
+    function FinishReasonsCommaSepStr: string;
+
+    /// <summary>
+    /// Returns True if the response is valid, False otherwise.
+    /// </summary>
+    function IsValid: boolean;
+
+    /// <summary>
+    /// Returns a string describing the failure, if any.
+    /// </summary>
+    function FailureDetail: string;
+
+    /// <summary>
+    /// Returns the result text formatted as Markdown.
+    /// </summary>
+    function ResultAsMarkDown: string;
+
+    {$IFDEF MARKDOWN2HTML}
+    /// <summary>
+    /// Returns the result text formatted as HTML (conditionally defined).
+    /// </summary>
+    function ResultAsHTML: string;
+    {$ENDIF}
+  end;
+
+  /// <summary>
+  /// Enumerates the reason for safety blocking.
+  /// </summary>
+  TSafetyBlockLevel = (
+    sblNone,            // No safety blocking.
+    sblOnlyHigh,        // Block only high-risk content.
+    sblMediumAndAbove,  // Block medium and high-risk content.
+    sblLowAndAbove,     // Block low, medium, and high-risk content.
+    sblUseDefault       // Use the default safety level.
+  );
+
+  /// <summary>
+  /// Exception class for Gemini AI requests
+  /// </summary>
+  EGeminiAIRequest = class(Exception);
+
+  /// <summary>
+  /// Interface for starting operations on Gemini AI API.
+  /// </summary>
+  IGeminiAIRequest = interface(IInterface)
+
+    /// <summary>
+    /// Use simple prompt text as request
+    /// </summary>
+    function Prompt(const PromptText: string): IGeminiAIRequest;
+
+    /// <summary>
+    /// Use a media file (document, picture, video, audio) with a command prompt question
+    /// </summary>
+    function PromptWithMediaData(const PromptText, MimeType: string; MediaStream: TStream): IGeminiAIRequest;
+
+    {$IF Defined(FMX) OR Defined(FGX)}
+    /// <summary>
+    /// For images the MimeType can be evaluated automatically
+    function PromptWithImgData(const PromptText: string; ImgStream: TStream): IGeminiAIRequest;
+    {$ENDIF}
+
+    /// <summary>
+    /// Sets the model parameters for the request.
+    /// </summary>
+    /// <param name="Temperatur">Controls the randomness of the generated text.
+    /// </param>
+    /// <param name="TopP">Controls the diversity of the generated text.
+    /// </param>
+    /// <param name="MaxOutputTokens">Limits the maximum number of tokens in the generated text.
+    /// </param>
+    /// <param name="TopK">:Controls the number of candidate words considered during generation.
+    /// </param>
+    function ModelParameter(Temperatur, TopP: double; MaxOutputTokens, TopK: cardinal): IGeminiAIRequest;
+
+    /// <summary>
+    /// Sets the stop sequences for the request.
+    /// Stop sequences are used to stop the generation process when encountered.
+    /// </summary>
+    function SetStopSequences(StopSequences: TStrings): IGeminiAIRequest;
+
+    /// <summary>
+    /// Sets the safety settings for the request.
+    /// </summary>
+    /// <param name="HarmCat">Specifies the category of harmful content to block.
+    /// </param>
+    /// <param name="LevelToBlock">:Specifies the safety level to use for blocking.
+    /// </param>
+    function SetSafety(HarmCat: THarmCategory; LevelToBlock: TSafetyBlockLevel): IGeminiAIRequest;
+
+    /// <summary>
+    /// For using in chats add the model answer to the next request.
+    /// </summary>
+    procedure AddAnswerForNextRequest(const ResultAsMarkDown: string);
+
+    /// <summary>
+    /// In chats after adding the last answer from the model the next question from the user can be added.
+    /// </summary>
+    procedure AddQuestionForNextRequest(const PromptText: string);
+
+    /// <summary>
+    /// Within a chat to calculated to number of tokens in the prompt this function allows get a working request.
+    /// </summary>
+    function CloneWithoutCfgAndSettings(Request: IGeminiAIRequest): IGeminiAIRequest;
+  end;
+
+  /// <summary>
+  /// IGeminiAI defines an interface for interacting with a Gemini AI model.
+  /// </summary>
+  IGeminiAI = interface(IInterface)
+    /// <summary>
+    /// GenerateContentByPromptSynchronous generates text content as a response based on the provided simple
+    /// text prompt containing the question. Use this blocking function not in the main thread of a GUI
+    /// application but in threads, services
+    /// or console applications.
+    /// </summary>
+    /// <param name="Prompt">The text prompt to generate content from.
+    /// </param>
+    /// <returns>IGeminiAIResponse: An interface representing the AI's response.
+    /// </returns>
+    function GenerateContentByPromptSynchronous(const Prompt: string): IGeminiAIResponse;
+
+    /// <summary>
+    /// GenerateContentbyPrompt generates content asynchronously based on the provided simple text prompt.
+    /// Use this none blocking function in the main thread of a GUI application.
+    /// </summary>
+    /// <param name="Prompt">The text prompt to generate content from.
+    /// </param>
+    /// <param name="OnRespone">A callback function to invoke when the response is ready.
+    /// </param>
+    procedure GenerateContentbyPrompt(const Prompt: string;
+      OnRespone: TOnGeminiGenContent);
+
+    /// <summary>
+    /// GenerateContentByRequestSynchronous generates content based on the provided IGeminiAIRequest.
+    /// Use this blocking function not in the main thread of a GUI application but in threads, services
+    /// or console applications.
+    /// </summary>
+    /// <param name="GeminiAIRequest">An interface of IGeminiAIRequest for using complex
+    /// prompts with model parameters, media files and model answers in chat applications.
+    /// </param>
+    /// <returns>IGeminiAIResponse: An interface representing the AI's response.
+    /// </returns>
+    function GenerateContentByRequestSynchronous(GeminiAIRequest: IGeminiAIRequest): IGeminiAIResponse;
+
+    /// <summary>
+    /// GenerateContentByRequest generates content asynchronously based on the provided IGeminiAIRequest.
+    /// Use this none blocking function in the main thread of a GUI applications.
+    /// </summary>
+    /// <param name="GeminiAIRequest">An interface of IGeminiAIRequest for using complex
+    /// prompts with model parameters, media files and model answers in chat applications.
+    /// </param>
+    /// <param name="OnRespone">A callback function to invoke when the response is ready.
+    /// </param>
+    procedure GenerateContentByRequest(GeminiAIRequest: IGeminiAIRequest;
+      OnRespone: TOnGeminiGenContent);
+
+    /// <summary>
+    /// CountTokenOfPrompt asynchronously counts the number of tokens in the given simple text prompt.
+    /// Use this none blocking function in the main thread of a GUI applications.
+    /// </summary>
+    /// <param name="Prompt">The text prompt to count tokens in.
+    /// </param>
+    /// <param name="OnResponse">A callback function to invoke with the token count.
+    /// </param>
+    procedure CountTokenOfPrompt(const Prompt: string; OnResponse: TOnGeminiCountToken);
+
+    /// <summary>
+    /// CountTokenOfRequestSynchronous synchronously counts the number of tokens in the given simple text prompt.
+    /// Use this blocking function not in the main thread of a GUI application but in threads, services
+    /// or console applications.
+    /// </summary>
+    /// <param name="Prompt">The text prompt to count tokens in.
+    /// </param>
+    /// <param name="ErrorMsg">Returns an error reason in case of an error.
+    /// </param>
+    /// <param name="CachedContentToken">An output parameter for the cached token count.
+    /// When not using cached content 0 will be returned.</param>
+    /// <returns>The number of tokens in the prompt.
+    /// </returns>
+    function CountTokenOfPromptSynchronous(const Prompt: string; out ErrorMsg: string;
+      out CachedContentToken: integer): integer;
+
+    /// <summary>
+    /// CountTokenOfPrompt asynchronously counts the number of tokens in the given complex prompt.
+    /// Use this none blocking function in the main thread of a GUI applications.
+    /// </summary>
+    /// <param name="GeminiAIRequest">An interface of IGeminiAIRequest with the complex prompt.
+    /// </param>
+    /// <param name="OnResponse">A callback function to invoke with the token count.
+    /// </param>
+    procedure CountTokenOfRequest(GeminiAIRequest: IGeminiAIRequest; OnResponse: TOnGeminiCountToken);
+
+    /// <summary>
+    /// Use this blocking function not in the main thread of a GUI application but in threads, services
+    /// or console applications.
+    /// </summary>
+    /// <param name="GeminiAIRequest">An interface of IGeminiAIRequest with the complex prompt.
+    /// </param>
+    /// <param name="ErrorMsg">Returns an error reason in case of an error.
+    /// </param>
+    /// <param name="CachedContentToken">An output parameter for the cached token count.
+    /// When not using cached content 0 will be returned.</param>
+    /// <returns>The number of tokens in the prompt.
+    /// </returns>
+    function CountTokenOfRequestSynchronous(GeminiAIRequest: IGeminiAIRequest; out ErrorMsg: string;
+      out CachedContentToken: integer): integer;
+  end;
+  {$ENDREGION}
+
+  {$REGION 'Class factory for getting Firebase Services'}
+
+  /// <summary>
+  /// Exception class for Firebase configuration interface
+  /// </summary>
+  EFirebaseConfiguration = class(Exception);
 
   /// <summary>
   /// The interface IFirebaseConfiguration provides a class factory for
-  /// accessing all interfaces to the Firebase services. The interface will be
-  /// created by the constructors of the class TFirebaseConfiguration in the
-  /// unit FB4D.Configuration. The first constructor requires all secrets of the
-  /// Firebase project as ApiKey and Project ID and when using the Storage also
-  /// the storage Bucket. The second constructor parses the google-services.json
-  /// file that shall be loaded from the Firebase Console after adding an App in
-  /// the project settings.
+  /// accessing all interfaces to the Firebase services.
   /// </summary>
-  EFirebaseConfiguration = class(Exception);
+  /// <remarks>
+  /// The interface will be created by the constructors of the class
+  /// TFirebaseConfiguration in the unit FB4D.Configuration.
+  /// The first constructor requires all secrets of the Firebase project
+  /// such as ApiKey and Project ID and when using the Storage also the
+  /// storage Bucket.
+  /// The second constructor variant parses the google-services.json file that
+  /// shall be loaded from the Firebase Console after adding an App in the
+  /// project settings.
+  /// </remarks>
   IFirebaseConfiguration = interface(IInterface)
+    /// <summary>
+    /// Returns the Firebase project ID.
+    /// </summary>
     function ProjectID: string;
+
+    /// <summary>
+    /// Returns the IFirebaseAuthentication interface for managing user authentication.
+    /// </summary>
     function Auth: IFirebaseAuthentication;
+
+    /// <summary>
+    /// Returns the IRealTimeDB interface for interacting with the Firebase Realtime Database.
+    /// </summary>
     function RealTimeDB: IRealTimeDB;
-    function Database(
-      const DatabaseID: string = cDefaultDatabaseID): IFirestoreDatabase;
+
+    /// <summary>
+    /// Returns the IFirestoreDatabase interface for interacting with the Firebase Firestore database.
+    /// </summary>
+    /// <param name="DatabaseID">The ID of the Firestore database to use.
+    /// Default is "(default)".</param>
+    function Database(const DatabaseID: string = cDefaultDatabaseID): IFirestoreDatabase;
+
+    /// <summary>
+    /// Returns the IFirebaseStorage interface for interacting with Firebase Storage.
+    /// </summary>
     function Storage: IFirebaseStorage;
-    function Functions: IFirebaseFunctions;
-    function VisionML: IVisionML;
+
+    /// <summary>
+    /// Sets the storage bucket to use.
+    /// </summary>
+    /// <param name="Bucket">The name of the storage bucket.</param>
     procedure SetBucket(const Bucket: string);
+
+    /// <summary>
+    /// Returns the IFirebaseFunctions interface for interacting with Firebase Cloud Functions.
+    /// </summary>
+    function Functions: IFirebaseFunctions;
+
+    /// <summary>
+    /// Returns the IVisionML interface for interacting with Firebase ML Vision APIs.
+    /// </summary>
+    function VisionML: IVisionML;
+
+    /// <summary>
+    /// Returns the IGeminiAI interface for interacting with Gemini AI APIs.
+    /// </summary>
+    function GeminiAI(const ApiKey: string; const Model: string = cGeminiAIDefaultModel): IGeminiAI;
   end;
+  {$ENDREGION}
 
 const
   cFirestoreDocumentPath = 'projects/%s/databases/%s/documents%s';
@@ -971,6 +1709,21 @@ begin
   Create(nil);
   OnSuccessCase := oscPwdVerification;
   OnPasswordVerification := OnPasswordVerificationResp;
+end;
+
+constructor TOnSuccess.CreateGeminiGenerateContent(
+  OnGeminiGenContent: TOnGeminiGenContent);
+begin
+  Create(nil);
+  OnSuccessCase := oscGeminiGenContent;
+  OnGenerateContent := OnGeminiGenContent;
+end;
+
+constructor TOnSuccess.CreateGeminiCountToken(OnGeminiCountToken: TOnGeminiCountToken);
+begin
+  Create(nil);
+  OnSuccessCase := oscGeminiCountToken;
+  OnCountToken := OnGeminiCountToken;
 end;
 
 constructor TOnSuccess.CreateGetUserData(OnGetUserDataResp: TOnGetUserData);
@@ -1101,6 +1854,96 @@ begin
   Create(nil);
   OnSuccessCase := oscVisionML;
   OnAnnotate := OnAnnotateResp;
+end;
+
+{ TUsageMetaData }
+
+procedure TGeminiAIUsageMetaData.Init;
+begin
+  PromptTokenCount := 0;
+  GeneratedTokenCount := 0;
+  TotalTokenCount := 0;
+end;
+
+{ TGeminiResult }
+
+function TGeminiAIResult.ResultAsMarkDown: string;
+var
+  c: integer;
+begin
+  case length(PartText) of
+    0: result := '';
+    1: result := PartText[0];
+    else begin
+      for c := 0 to length(PartText) - 1 do
+        result := result + '- ' + PartText[c] + sLineBreak;
+    end;
+  end;
+end;
+
+function TGeminiAIResult.FinishReasonAsStr: string;
+begin
+  case FinishReason of
+    gfrUnknown:
+      result := '?';
+    gfrStop:
+      result := 'Stop';
+    gfrMaxToken:
+      result := 'Max token';
+    gfrSafety:
+      result := 'Safty';
+    gfrRecitation:
+      result := 'Recitation';
+    gfrOther:
+      result := 'Other';
+  end;
+end;
+
+{ TSafetyRating }
+
+procedure TSafetyRating.Init;
+begin
+  Probability := psUnknown;
+  ProbabilityScore := 0;
+  Severity := psUnknown;
+  SeverityScore := 0;
+end;
+
+function TSafetyRating.ProbabilityAsStr: string;
+begin
+  case Probability of
+    psUnknown:
+      result := '';
+    psNEGLIGIBLE:
+      result := 'negligible';
+    psLOW:
+      result := 'low';
+    psMEDIUM:
+      result := 'medium';
+    psHIGH:
+      result := 'high';
+    else
+      result := '?';
+  end;
+end;
+
+function TSafetyRating.SeverityAsStr: string;
+begin
+  case Severity of
+    psUnknown:
+      result := '';
+    psNEGLIGIBLE:
+      result := 'negligible';
+    psLOW:
+      result := 'low';
+    psMEDIUM:
+      result := 'medium';
+    psHIGH:
+      result := 'high';
+    else
+      result := '?';
+  end;
+
 end;
 
 end.

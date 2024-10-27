@@ -1,3 +1,9 @@
-[submodule "JOSE"]
-	path = JOSE
+[submodule "submodules/delphi-jose-jwt"]
+	path = submodules/delphi-jose-jwt
 	url = https://github.com/paolo-rossi/delphi-jose-jwt.git
+	branch = master
+[submodule "submodules/delphi-markdown"]
+	path = submodules/delphi-markdown
+	url = https://github.com/grahamegrieve/delphi-markdown.git
+	branch = master
+

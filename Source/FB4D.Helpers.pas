@@ -1,7 +1,7 @@
 {******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -40,6 +40,8 @@ type
   TOnSimpleDownloadSuccess = procedure(const DownloadURL: string) of object;
   TOnLog = procedure(const Text: string) of object;
 
+  EID64 = class(Exception);
+
   TFirebaseHelpers = class
     class var OnLog: TOnLog;
     // Time conversion functions
@@ -56,6 +58,7 @@ type
     class function EncodeQueryParamsWithToken(QueryParams: TQueryParams;
       const EncodedToken: string): string;
     // Request parameter helpers
+    class function EncodeResourceParam(Param: string): string;
     class function EncodeResourceParams(Params: TRequestResourceParam): string;
     class function AddParamToResParams(Params: TRequestResourceParam;
       const Param: string): TRequestResourceParam;
@@ -66,18 +69,25 @@ type
     class function ArrStrToQuotedCommaStr(Arr: array of string): string;
     class function FirestorePath(const Path: string): TRequestResourceParam;
       deprecated 'Use TFirestorePath.ConvertToDocPath instead';
-    // FBID is based on charset of cBase64: Helpers and converter to GUID
-    // PUSHID is based on charset of cPushID64: Supports chronological sorting
-    type TIDKind = (FBID {random 22 Chars},
-                    PUSHID {timestamp and random: total 20 Chars},
-                    FSID {random 20 Chars});
+    // ID64 is based on charset cID64 (A..z,0..9,_-): Helpers and converter to GUID
+    // PUSHID is based on same charset cPushID64 but supports chronological sorting
+    type TIDKind = (FBID {random 22 ID64 chars},
+                    PUSHID {timestamp and random: total 20 chars of PushID64},
+                    FSID {random 20 ID64 chars},
+                    FSPUSHID {timestamp and random: total 24 ID64 chars});
     class function CreateAutoID(IDKind: TIDKind = FBID): string;
-    class function ConvertGUIDtoFBID(Guid: TGuid): string;
-    class function ConvertFBIDtoGUID(const FBID: string): TGuid;
+    class function ConvertGUIDtoID64(Guid: TGuid): string;
+    class function ConvertID64toGUID(const ID: string): TGuid;
     class function ConvertTimeStampAndRandomPatternToPUSHID(timestamp: TDateTime;
-      Random: TBytes): string;
+      Random: TBytes; TimeIsUTC: boolean = false): string;
     class function DecodeTimeStampFromPUSHID(const PUSHID: string;
       ConvertToLocalTime: boolean = true): TDateTime;
+    class function ConvertTimeStampAndRandomPatternToID64(timestamp: TDateTime;
+      Random: TBytes; TimeIsUTC: boolean = false): string;
+    class function DecodeTimeStampFromBase64(const FSPUSHID: string;
+      ConvertToLocalTime: boolean = true): TDateTime;
+    class function DecodeID64ToBytes(const ID64: string): TBytes;
+    class function EncodeBytesToID64(Bytes: TBytes): string;
 
     // File helpers
     class procedure SimpleDownload(const DownloadUrl: string; Stream: TStream;
@@ -103,13 +113,16 @@ type
     // ML helpers
     class function GetLanguageInEnglishFromCode(const Code: string): string;
   private const
-    cBase64 =
+    cID64 =
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
-    // The last two chars '_' and '-' are not real Base64 because '+' and '/'
-    // causes troubles in IDs
+    // Base64 with exception of the last two chars '_' and '-' are not real Base64
+    // because '+' and '/' causes troubles in IDs
     cPushID64 =
       '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz';
     // This notification is used in the Realtime DB for Post and Push operation
+    class function GetID64Char(b: Byte): char;
+    class function GetPushID(ch: Char): Integer; inline;
+    class function GetID64(ch: Char): Integer; inline;
   end;
 
   TFirestorePath = class
@@ -129,18 +142,21 @@ type
     function GetStringValue: string; overload;
     function GetStringValue(const Name: string): string; overload;
     function GetStringValueDef(const Name: string;
-      const Default: string = ''): string;
+      const Default: string = ''): string; overload;
+    function GetStringValueDef(const Default: string = ''): string; overload;
     class function SetStringValue(const Val: string): TJSONObject;
     class function SetString(const VarName, Val: string): TJSONPair;
     // Integer
     function GetIntegerValue: integer; overload;
     function GetIntegerValue(const Name: string): integer; overload;
     function GetIntegerValueDef(const Name: string;
-      Default: integer = 0): integer;
+      Default: integer = 0): integer; overload;
+    function GetIntegerValueDef(Default: integer = 0): integer; overload;
     function GetInt64Value: Int64; overload;
     function GetInt64Value(const Name: string): Int64; overload;
+    function GetInt64ValueDef(Default: Int64 = 0): Int64; overload;
     function GetInt64ValueDef(const Name: string;
-      Default: Int64 = 0): Int64;
+      Default: Int64 = 0): Int64; overload;
     class function SetIntegerValue(Val: integer): TJSONObject;
     class function SetInteger(const VarName: string; Val: integer): TJSONPair;
     class function SetInt64Value(Val: Int64): TJSONObject;
@@ -149,13 +165,17 @@ type
     function GetBooleanValue: boolean; overload;
     function GetBooleanValue(const Name: string): boolean; overload;
     function GetBooleanValueDef(const Name: string;
-      Default: boolean = false): boolean;
+      Default: boolean = false): boolean; overload;
+    function GetBooleanValueDef(Default: boolean = false): boolean; overload;
     class function SetBooleanValue(Val: boolean): TJSONObject;
     class function SetBoolean(const VarName: string; Val: boolean): TJSONPair;
     // Double
     function GetDoubleValue: double; overload;
     function GetDoubleValue(const Name: string): double; overload;
     function GetDoubleValueDef(const Name: string; Default: double = 0): double;
+      overload;
+    function GetDoubleValueDef(Default: double = 0): double;
+      overload;
     class function SetDoubleValue(Val: double): TJSONObject;
     class function SetDouble(const VarName: string; Val: double): TJSONPair;
     // TimeStamp
@@ -163,7 +183,9 @@ type
     function GetTimeStampValue(const Name: string;
       TimeZone: TTimeZone = tzUTC): TDateTime; overload;
     function GetTimeStampValueDef(const Name: string; Default: TDateTime = 0;
-      TimeZone: TTimeZone = tzUTC): TDateTime;
+      TimeZone: TTimeZone = tzUTC): TDateTime; overload;
+    function GetTimeStampValueDef(Default: TDateTime = 0;
+      TimeZone: TTimeZone = tzUTC): TDateTime; overload;
     class function SetTimeStampValue(Val: TDateTime;
       TimeZone: FB4D.Interfaces.TTimeZone = tzUTC): TJSONObject;
     class function SetTimeStamp(const VarName: string;
@@ -176,7 +198,8 @@ type
     function GetReference: string; overload;
     function GetReference(const Name: string): string; overload;
     function GetReferenceDef(const Name: string;
-      const Default: string = ''): string;
+      const Default: string = ''): string; overload;
+    function GetReferenceDef(const Default: string = ''): string; overload;
     class function SetReferenceValue(const ProjectID, Ref: string;
       const Database: string = cDefaultDatabaseID): TJSONObject;
     class function SetReference(const Name, ProjectID, Ref: string): TJSONPair;
@@ -184,7 +207,9 @@ type
     function GetGeoPoint: TLocationCoord2D; overload;
     function GetGeoPoint(const Name: string): TLocationCoord2D; overload;
     function GetGeoPointDef(const Name: string;
-      Default: TLocationCoord2D): TLocationCoord2D;
+      Default: TLocationCoord2D): TLocationCoord2D; overload;
+    function GetGeoPointDef(Default: TLocationCoord2D): TLocationCoord2D;
+      overload;
     class function SetGeoPointValue(Val: TLocationCoord2D): TJSONObject;
     class function SetGeoPoint(const VarName: string;
       Val: TLocationCoord2D): TJSONPair;
@@ -284,7 +309,7 @@ begin
   UTC := TTimeZone.Local.ToUniversalTime(DateTimeStamp);
   // Format RFC3339
   result := FormatDateTime('yyyy-mm-dd', UTC) + 'T' +
-    FormatDateTime('hh:mm:ss', UTC) + 'Z';
+    FormatDateTime('hh:mm:ss.zzz', UTC) + 'Z';
 end;
 
 class function TFirebaseHelpers.DecodeRFC3339DateTime(
@@ -362,8 +387,7 @@ begin
           TNetEncoding.URL.Encode(ParVal);
 end;
 
-class function TFirebaseHelpers.EncodeResourceParams(
-  Params: TRequestResourceParam): string;
+class function TFirebaseHelpers.EncodeResourceParam(Param: string): string;
 const
   PathUnsafeChars: TURLEncoding.TUnsafeChars =
     [Ord('"'), Ord('<'), Ord('>'), Ord('^'), Ord('`'), Ord('{'), Ord('}'),
@@ -371,13 +395,18 @@ const
   Option: TURLEncoding.TEncodeOptions =
     [TURLEncoding.TEncodeOption.SpacesAsPlus,
      TURLEncoding.TEncodeOption.EncodePercent];
+begin
+  result := TNetEncoding.URL.Encode(Param, PathUnsafeChars, Option);
+end;
+
+class function TFirebaseHelpers.EncodeResourceParams(
+  Params: TRequestResourceParam): string;
 var
   i: integer;
 begin
   result := '';
   for i := low(Params) to high(Params) do
-    result := result + '/' + TNetEncoding.URL.Encode(Params[i], PathUnsafeChars,
-      Option);
+    result := result + '/' + EncodeResourceParam(Params[i]);
 end;
 
 class function TFirebaseHelpers.EncodeToken(const Token: string): string;
@@ -569,117 +598,135 @@ end;
 
 class function TFirebaseHelpers.CreateAutoID(IDKind: TIDKind = FBID): string;
 
-  function ShortenIDTo20Chars(const ID: string): string;
+  function ShortenID64To20Chars(const ID: string): string;
   begin
-    result := ReplaceStr(ID, '_', '');
-    result := ReplaceStr(ID, '-', '');
+    result := ID;
     if result.Length > 20 then
       result := result.Substring(0, 20);
-    while result.Length < 20 do
-      result := result + cBase64[Random(62)];
   end;
 
 begin
   // use OS to generate a random number
   case IDKind of
     FBID:
-      result := ConvertGUIDtoFBID(TGuid.NewGuid);
+      result := ConvertGUIDtoID64(TGuid.NewGuid);
     FSID:
-      result := ShortenIDTo20Chars(ConvertGUIDtoFBID(TGuid.NewGuid));
+      result := ShortenID64To20Chars(ConvertGUIDtoID64(TGuid.NewGuid));
     PUSHID:
       result := ConvertTimeStampAndRandomPatternToPUSHID(now,
-        THashMD5.GetHashBytes(GuidToString(TGUID.NewGuid)));
+        copy(THashMD5.GetHashBytes(GuidToString(TGUID.NewGuid)), 1, 12));
+    FSPUSHID:
+      result := ConvertTimeStampAndRandomPatternToID64(now,
+        copy(THashSHA1.GetHashBytes(GuidToString(TGUID.NewGuid)), 1, 16));
   end;
 end;
 
-class function TFirebaseHelpers.ConvertGUIDtoFBID(Guid: TGuid): string;
-
-  function GetBase64(b: Byte): char;
-  begin
-    result := cBase64[low(cBase64) + b and $3F];
-  end;
-
+class function TFirebaseHelpers.ConvertGUIDtoID64(Guid: TGuid): string;
 var
   D1: cardinal;
   D2, D3: Word;
 begin
   SetLength(result, 22);
   D1 := Guid.D1;
-  result[1] := GetBase64(D1 and $FF);
+  result[1] := GetID64Char(D1 and $FF);
   D1 := D1 shr 6;
-  result[2] := GetBase64(D1 and $FF);
+  result[2] := GetID64Char(D1 and $FF);
   D1 := D1 shr 6;
-  result[3] := GetBase64(D1 and $FF);
+  result[3] := GetID64Char(D1 and $FF);
   D1 := D1 shr 6;
-  result[4] := GetBase64(D1 and $FF);
+  result[4] := GetID64Char(D1 and $FF);
   D1 := D1 shr 6;
-  result[5] := GetBase64(D1 and $FF);
+  result[5] := GetID64Char(D1 and $FF);
   D2 := Guid.D2;
-  result[6] := GetBase64(D2 and $FF);
+  result[6] := GetID64Char(D2 and $FF);
   D2 := D2 shr 6;
-  result[7] := GetBase64(D2 and $FF);
+  result[7] := GetID64Char(D2 and $FF);
   D2 := D2 shr 6;
-  result[8] := GetBase64(D2 and $F + (D1 and $C0) shr 2);
+  result[8] := GetID64Char(D2 and $F + (D1 and $C0) shr 2);
   D3 := Guid.D3;
-  result[9] := GetBase64(D3 and $FF);
+  result[9] := GetID64Char(D3 and $FF);
   D3 := D3 shr 6;
-  result[10] := GetBase64(D3 and $FF);
+  result[10] := GetID64Char(D3 and $FF);
   D3 := D3 shr 6;
-  result[11] := GetBase64(D3 and $F + (Guid.D4[0] and $C0) shr 2);
-  result[12] := GetBase64(Guid.D4[0]);
-  result[13] := GetBase64(Guid.D4[1]);
-  result[14] := GetBase64(Guid.D4[2]);
-  result[15] := GetBase64(Guid.D4[3]);
-  result[16] := GetBase64(Guid.D4[4]);
-  result[17] := GetBase64(Guid.D4[5]);
-  result[18] := GetBase64(Guid.D4[6]);
-  result[19] := GetBase64(Guid.D4[7]);
-  result[20] := GetBase64((Guid.D4[1] and $C0) shr 6 +
+  result[11] := GetID64Char(D3 and $F + (Guid.D4[0] and $C0) shr 2);
+  result[12] := GetID64Char(Guid.D4[0]);
+  result[13] := GetID64Char(Guid.D4[1]);
+  result[14] := GetID64Char(Guid.D4[2]);
+  result[15] := GetID64Char(Guid.D4[3]);
+  result[16] := GetID64Char(Guid.D4[4]);
+  result[17] := GetID64Char(Guid.D4[5]);
+  result[18] := GetID64Char(Guid.D4[6]);
+  result[19] := GetID64Char(Guid.D4[7]);
+  result[20] := GetID64Char((Guid.D4[1] and $C0) shr 6 +
     (Guid.D4[2] and $C0) shr 4 + (Guid.D4[3] and $C0) shr 2);
-  result[21] := GetBase64((Guid.D4[4] and $C0) shr 6 +
+  result[21] := GetID64Char((Guid.D4[4] and $C0) shr 6 +
     (Guid.D4[5] and $C0) shr 4 + (Guid.D4[6] and $C0) shr 2);
-  result[22] := GetBase64((Guid.D4[7] and $C0) shr 6);
+  result[22] := GetID64Char((Guid.D4[7] and $C0) shr 6);
 end;
 
-class function TFirebaseHelpers.ConvertFBIDtoGUID(const FBID: string): TGuid;
+class function TFirebaseHelpers.ConvertID64toGUID(const ID: string): TGuid;
 var
   c: integer;
-  Base64: array[1..22] of byte;
+  ID64: array[1..22] of byte;
 begin
-  for c := low(Base64) to high(Base64) do
-    Base64[c] := 0; // Zero for ID that are shorter than 22
-  for c := 1 to max(length(FBID), high(Base64)) do
-    Base64[c] := pos(FBID[c], cBase64) - 1;
-  result.D1 := Base64[1] + Base64[2] shl 6 + Base64[3] shl 12 +
-    Base64[4] shl 18 + Base64[5] shl 24 + (Base64[8] and $30) shl 26;
-  result.D2 := Base64[6] + Base64[7] shl 6 + (Base64[8] and $F) shl 12;
-  result.D3 := Base64[9] + Base64[10] shl 6 + (Base64[11] and $F) shl 12;
-  result.D4[0] := Base64[12] + (Base64[11] and $30) shl 2;
-  result.D4[1] := Base64[13] + (Base64[20] and $03) shl 6;
-  result.D4[2] := Base64[14] + (Base64[20] and $0C) shl 4;
-  result.D4[3] := Base64[15] + (Base64[20] and $30) shl 2;
-  result.D4[4] := Base64[16] + (Base64[21] and $03) shl 6;
-  result.D4[5] := Base64[17] + (Base64[21] and $0C) shl 4;
-  result.D4[6] := Base64[18] + (Base64[21] and $30) shl 2;
-  result.D4[7] := Base64[19] + (Base64[22] and $03) shl 6;
+  for c := low(ID64) to high(ID64) do
+    ID64[c] := 0; // Zero for ID that are shorter than 22
+  for c := 1 to max(length(ID), high(ID64)) do
+    ID64[c] := GetID64(ID[c]);
+  result.D1 := ID64[1] + ID64[2] shl 6 + ID64[3] shl 12 +
+    ID64[4] shl 18 + ID64[5] shl 24 + (ID64[8] and $30) shl 26;
+  result.D2 := ID64[6] + ID64[7] shl 6 + (ID64[8] and $F) shl 12;
+  result.D3 := ID64[9] + ID64[10] shl 6 + (ID64[11] and $F) shl 12;
+  result.D4[0] := ID64[12] + (ID64[11] and $30) shl 2;
+  result.D4[1] := ID64[13] + (ID64[20] and $03) shl 6;
+  result.D4[2] := ID64[14] + (ID64[20] and $0C) shl 4;
+  result.D4[3] := ID64[15] + (ID64[20] and $30) shl 2;
+  result.D4[4] := ID64[16] + (ID64[21] and $03) shl 6;
+  result.D4[5] := ID64[17] + (ID64[21] and $0C) shl 4;
+  result.D4[6] := ID64[18] + (ID64[21] and $30) shl 2;
+  result.D4[7] := ID64[19] + (ID64[22] and $03) shl 6;
 end;
 
 class function TFirebaseHelpers.ConvertTimeStampAndRandomPatternToPUSHID(
-  timestamp: TDateTime; Random: TBytes): string;
+  timestamp: TDateTime; Random: TBytes; TimeIsUTC: boolean): string;
 var
   tsi: int64;
   c: integer;
 begin
   Assert(length(Random) >= 12, 'Too short random pattern');
-  tsi := System.DateUtils.DateTimeToUnix(timestamp, false) * 1000;
+  tsi := System.DateUtils.DateTimeToUnix(timestamp, TimeIsUTC) * 1000 +
+    System.DateUtils.MilliSecondOf(timestamp);
   result := '';
   for c := 1 to 8 do
   begin
     result := cPushID64[(tsi mod 64) + low(cPushID64)] + result;
     tsi := tsi shr 6;
   end;
-  for c := 0 to 11 do
+  for c := 0 to length(Random) - 1 do
     result := result + cPushID64[Random[c] and $3F + low(cPushID64)];
+end;
+
+class function TFirebaseHelpers.GetPushID(ch: Char): Integer;
+begin
+  result := pos(ch, cPushID64);
+  if result < 0 then
+    raise EID64.Create('Invalid PushID character: ' + ch);
+  if low(cPushID64) > 0 then
+    dec(result, low(cPushID64));
+end;
+
+class function TFirebaseHelpers.GetID64(ch: Char): Integer;
+begin
+  result := pos(ch, cID64);
+  if result < 0 then
+    raise EID64.Create('Invalid ID64 character: ' + ch);
+  if low(cID64) > 0 then
+    dec(result, low(cID64));
+end;
+
+class function TFirebaseHelpers.GetID64Char(b: Byte): char;
+begin
+  result := cID64[low(cID64) + b and $3F];
 end;
 
 class function TFirebaseHelpers.DecodeTimeStampFromPUSHID(
@@ -691,10 +738,103 @@ begin
   Assert(length(PUSHID) = 20, 'Invalid PUSHID length');
   tsi := 0;
   for c := low(PUSHID) to low(PUSHID) + 7 do
-    tsi := tsi shl 6 + pos(PUSHID[c], cPushID64) - low(cPushID64);
+    tsi := tsi shl 6 + GetPushID(PUSHID[c]);
   result := UnixToDateTime(tsi div 1000);
   if ConvertToLocalTime then
     result := TTimeZone.Local.ToLocalTime(result);
+  result := result + (tsi mod 1000) / 24 / 3600 / 1000;
+end;
+
+class function TFirebaseHelpers.ConvertTimeStampAndRandomPatternToID64(
+  timestamp: TDateTime; Random: TBytes; TimeIsUTC: boolean): string;
+var
+  tsi: int64;
+  c: integer;
+begin
+  Assert(length(Random) >= 12, 'Too short random pattern');
+  tsi := System.DateUtils.DateTimeToUnix(timestamp, TimeIsUTC) * 1000 +
+    System.DateUtils.MilliSecondOf(timestamp);
+  result := '';
+  for c := 1 to 8 do
+  begin
+    result := cID64[(tsi mod 64) + low(cID64)] + result;
+    tsi := tsi shr 6;
+  end;
+  for c := 0 to length(Random) - 1 do
+    result := result + cID64[Random[c] and $3F + low(cID64)];
+end;
+
+class function TFirebaseHelpers.DecodeTimeStampFromBase64(const FSPUSHID: string;
+  ConvertToLocalTime: boolean): TDateTime;
+var
+  tsi: int64;
+  c: integer;
+begin
+  Assert(length(FSPUSHID) = 24, 'Invalid PUSHID length');
+  tsi := 0;
+  for c := low(FSPUSHID) to low(FSPUSHID) + 7 do
+    tsi := tsi shl 6 + GetID64(FSPUSHID[c]);
+  result := UnixToDateTime(tsi div 1000);
+  if ConvertToLocalTime then
+    result := TTimeZone.Local.ToLocalTime(result);
+  result := result + (tsi mod 1000) / 24 / 3600 / 1000;
+end;
+
+class function TFirebaseHelpers.DecodeID64ToBytes(const ID64: string): TBytes;
+var
+  b: Byte;
+  c, d: integer;
+begin
+  SetLength(result, ceil(length(ID64) * 3 / 4)); // ceil rounds up
+  d := 0;
+  for c := Low(ID64) to High(ID64) do
+  begin
+    b := GetID64(ID64[c]);
+    case (c - low(ID64)) mod 4 of
+      0: begin
+           result[d] := b shl 2;
+         end;
+      1: begin
+           result[d] := result[d] + (b shr 4);
+           inc(d);
+           result[d] := (b and $F) shl 4;
+         end;
+      2: begin
+           result[d] := result[d] + (b shr 2);
+           inc(d);
+           result[d] := (b and $3) shl 6;
+         end;
+      3: begin
+           result[d] := result[d] + b;
+           inc(d);
+         end;
+    end;
+  end;
+end;
+
+class function TFirebaseHelpers.EncodeBytesToID64(Bytes: TBytes): string;
+var
+  c, rest: integer;
+begin
+  result := '';
+  rest := 0;
+  for c := 0 to length(Bytes) - 1 do
+    case c mod 3 of
+      0: begin
+           result := result + GetID64Char(Bytes[c] shr 2);
+           rest := (Bytes[c] and $3) shl 4;
+         end;
+      1: begin
+           result := result + GetID64Char(rest + Bytes[c] shr 4);
+           rest := (Bytes[c] and $F) shl 2;
+         end;
+      2: begin
+           result := result + GetID64Char(rest + Bytes[c] shr 6) + GetID64Char(Bytes[c] and $3F);
+           rest := 0;
+         end;
+    end;
+  if rest > 0 then
+    result := result + GetID64Char(rest);
 end;
 
 {$IF Defined(FMX) OR Defined(FGX)}
@@ -1254,6 +1394,14 @@ begin
   result := GetValue<Int64>('integerValue');
 end;
 
+function TJSONHelpers.GetInt64ValueDef(Default: Int64): Int64;
+begin
+  if Assigned(FindValue('integerValue')) then
+    result := GetInt64Value
+  else
+    result := Default;
+end;
+
 function TJSONHelpers.GetIntegerValue(const Name: string): integer;
 var
   Val: TJSONValue;
@@ -1263,6 +1411,14 @@ begin
     result := (Val as TJSONObject).GetIntegerValue
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetIntegerValueDef(Default: integer): integer;
+begin
+  if Assigned(FindValue('integerValue')) then
+    result := GetIntegerValue
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetIntegerValueDef(const Name: string;
@@ -1316,6 +1472,14 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
+function TJSONHelpers.GetStringValueDef(const Default: string = ''): string;
+begin
+  if Assigned(FindValue('stringValue')) then
+    result := GetStringValue
+  else
+    result := Default;
+end;
+
 function TJSONHelpers.GetStringValueDef(const Name, Default: string): string;
 var
   Val: TJSONValue;
@@ -1341,6 +1505,14 @@ begin
     result := (Val as TJSONObject).GetBooleanValue
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetBooleanValueDef(Default: boolean): boolean;
+begin
+  if Assigned(FindValue('booleanValue')) then
+    result := GetBooleanValue
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetBooleanValueDef(const Name: string;
@@ -1369,6 +1541,14 @@ begin
     result := (Val as TJSONObject).GetDoubleValue
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetDoubleValueDef(Default: double): double;
+begin
+  if Assigned(FindValue('doubleValue')) then
+    result := GetDoubleValue
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetDoubleValueDef(const Name: string;
@@ -1406,6 +1586,15 @@ begin
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
 end;
 
+function TJSONHelpers.GetTimeStampValueDef(Default: TDateTime;
+  TimeZone: FB4D.Interfaces.TTimeZone): TDateTime;
+begin
+  if Assigned(FindValue('timestampValue')) then
+    result := GetTimeStampValue(TimeZone)
+  else
+    result := Default;
+end;
+
 function TJSONHelpers.GetTimeStampValueDef(const Name: string;
   Default: TDateTime; TimeZone: FB4D.Interfaces.TTimeZone): TDateTime;
 var
@@ -1439,6 +1628,15 @@ begin
     result := (Val as TJSONObject).GetGeoPoint
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetGeoPointDef(
+  Default: TLocationCoord2D): TLocationCoord2D;
+begin
+  if Assigned(FindValue('geoPointValue')) then
+    result := GetGeoPoint
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetGeoPointDef(const Name: string;
@@ -1556,6 +1754,14 @@ begin
     result := (Val as TJSONObject).GetReference
   else
     raise EJSONException.CreateFmt(SValueNotFound, [Name]);
+end;
+
+function TJSONHelpers.GetReferenceDef(const Default: string): string;
+begin
+  if Assigned(FindValue('referenceValue')) then
+    result := GetReference
+  else
+    result := Default;
 end;
 
 function TJSONHelpers.GetReferenceDef(const Name, Default: string): string;

@@ -1,7 +1,7 @@
 ﻿{******************************************************************************}
 {                                                                              }
 {  Delphi FB4D Library                                                         }
-{  Copyright (c) 2018-2023 Christoph Schneider                                 }
+{  Copyright (c) 2018-2024 Christoph Schneider                                 }
 {  Schneider Infosystems AG, Switzerland                                       }
 {  https://github.com/SchneiderInfosystems/FB4D                                }
 {                                                                              }
@@ -66,6 +66,7 @@ type
     destructor Destroy; override;
     function GetProjectID: string;
     function GetDatabaseID: string;
+    function CheckListenerHasUnprocessedDocuments: boolean;
     procedure RunQuery(StructuredQuery: IStructuredQuery;
       OnDocuments: TOnDocuments; OnRequestError: TOnRequestError;
       QueryParams: TQueryParams = nil); overload;
@@ -132,7 +133,11 @@ type
     procedure StartListener(OnStopListening: TOnStopListenEvent;
       OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
       OnConnectionStateChange: TOnConnectionStateChange = nil;
-      DoNotSynchronizeEvents: boolean = false);
+      DoNotSynchronizeEvents: boolean = false); overload;
+    procedure StartListener(OnStopListening: TOnStopListenEventDeprecated;
+      OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent = nil;
+      OnConnectionStateChange: TOnConnectionStateChange = nil;
+      DoNotSynchronizeEvents: boolean = false); overload;
     procedure StopListener(RemoveAllSubscription: boolean = true);
     function GetTimeStampOfLastAccess: TDateTime;
     // Transaction
@@ -146,6 +151,10 @@ type
     procedure CommitWriteTransaction(Transaction: IFirestoreWriteTransaction;
       OnCommitWriteTransaction: TOnCommitWriteTransaction;
       OnRequestError: TOnRequestError);
+    property ProjectID: string read GetProjectID;
+    property DatabaseID: string read GetDatabaseID;
+    property ListenerHasUnprocessedDocuments: boolean
+      read CheckListenerHasUnprocessedDocuments;
   end;
 
   TStructuredQuery = class(TInterfacedObject, IStructuredQuery)
@@ -222,8 +231,26 @@ type
     procedure UpdateDoc(Document: IFirestoreDocument);
     procedure PatchDoc(Document: IFirestoreDocument;
       UpdateMask: TStringDynArray);
+    procedure TransformDoc(const FullDocumentName: string;
+      Transform: IFirestoreDocTransform);
     procedure DeleteDoc(const DocumentFullPath: string);
     function GetWritesObjArray: TJSONArray;
+  end;
+
+  TFirestoreDocTransform = class(TInterfacedObject, IFirestoreDocTransform)
+  private
+    fFieldTransforms: TJSONArray;
+    function AsJSON(const DocumentFullName: string): string;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    function SetServerTime(const FieldName: string): IFirestoreDocTransform;
+    function Increment(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
+    function Maximum(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
+    function Minimum(const FieldName: string;
+      Value: TJSONObject): IFirestoreDocTransform;
   end;
 
   TFirestoreCommitTransaction = class(TInterfacedObject,
@@ -237,6 +264,7 @@ type
     function NoUpdates: cardinal;
     function UpdateTime(Index: cardinal; TimeZone: TTimeZone = tzUTC): TDateTime;
   end;
+
 implementation
 
 uses
@@ -253,7 +281,8 @@ const
   METHODE_ROLLBACK = ':rollback';
   FILTER_OERATION: array [TWhereOperator] of string = ('OPERATOR_UNSPECIFIED',
     'LESS_THAN', 'LESS_THAN_OR_EQUAL', 'GREATER_THAN',
-    'GREATER_THAN_OR_EQUAL', 'EQUAL', 'ARRAY_CONTAINS');
+    'GREATER_THAN_OR_EQUAL', 'EQUAL', 'NOT_EQUAL', 'ARRAY_CONTAINS',
+    'IN', 'ARRAY_CONTAINS_ANY', 'NOT_IN');
   COMPOSITEFILTER_OPERATION: array [TCompostiteOperation] of string = (
     'OPERATOR_UNSPECIFIED', 'AND');
   ORDER_DIRECTION: array [TOrderDirection] of string = ('DIRECTION_UNSPECIFIED',
@@ -278,8 +307,11 @@ begin
   inherited Create;
   fProjectID := ProjectID;
   fAuth := Auth;
-  fDatabaseID := DatabaseID;
-  fListener := TFSListenerThread.Create(ProjectID, DatabaseID, Auth);
+  if DatabaseID.IsEmpty then
+    fDatabaseID := cDefaultDatabaseID
+  else
+    fDatabaseID := DatabaseID;
+  fListener := TFSListenerThread.Create(ProjectID, fDatabaseID, Auth);
   fLastReceivedMsg := 0;
 end;
 
@@ -473,6 +505,14 @@ end;
 function TFirestoreDatabase.GetDatabaseID: string;
 begin
   result := fDatabaseID;
+end;
+
+function TFirestoreDatabase.CheckListenerHasUnprocessedDocuments: boolean;
+begin
+  if fListener.IsRunning and fListener.PendingDocumentChanges then
+    result := true
+  else
+    result := false;
 end;
 
 function TFirestoreDatabase.GetProjectID: string;
@@ -870,7 +910,12 @@ begin
   try
     fLastReceivedMsg := now;
     Response.CheckForJSONObj;
-    if assigned(Response.OnSuccess.OnDocumentDeleted) then
+    if not Response.StatusOk then
+    begin
+      if assigned(Response.OnError) then
+        Response.OnError(RequestID, Response.StatusText);
+    end
+    else if assigned(Response.OnSuccess.OnDocumentDeleted) then
       Response.OnSuccess.OnDocumentDeleted(RequestID,
         Response.GetServerTime(tzLocalTime));
   except
@@ -906,13 +951,12 @@ var
   Request: IFirebaseRequest;
   Data: TJSONObject;
 begin
-  Assert(assigned(fAuth), 'Authentication is required');
-  Request := TFirebaseRequest.Create(
-    GOOGLE_FIRESTORE_API_URL + METHODE_BEGINTRANS, rsBeginTrans, fAuth);
+  Request := TFirebaseRequest.Create(BaseURI + METHODE_BEGINTRANS,
+    rsBeginTrans, fAuth);
   Data := TJSONObject.Create(TJSONPair.Create('options',
     TJSONObject.Create(TJSONPair.Create('readOnly', TJSONObject.Create))));
-  Request.SendRequest(TFirestoreDocument.GetDocFullPath(fProjectID, fDatabaseID),
-    rmPOST, Data, nil, tmBearer, BeginReadTransactionResp, OnRequestError,
+  Request.SendRequest([], rmPOST, Data, nil, tmBearer, BeginReadTransactionResp,
+    OnRequestError,
     TOnSuccess.CreateFirestoreReadTransaction(OnBeginReadTransaction));
 end;
 
@@ -952,15 +996,12 @@ var
   Response: IFirebaseResponse;
   Data, Res: TJSONObject;
 begin
-  Assert(assigned(fAuth), 'Authentication is required');
-  Request := TFirebaseRequest.Create(
-    GOOGLE_FIRESTORE_API_URL + METHODE_BEGINTRANS, rsBeginTrans, fAuth);
+  Request := TFirebaseRequest.Create(BaseURI + METHODE_BEGINTRANS,
+    rsBeginTrans, fAuth);
   Data := TJSONObject.Create(TJSONPair.Create('options',
     TJSONObject.Create(TJSONPair.Create('readOnly', TJSONObject.Create))));
   try
-    Response := Request.SendRequestSynchronous(
-      TFirestoreDocument.GetDocFullPath(fProjectID, fDatabaseID), rmPOST, Data,
-      nil);
+    Response := Request.SendRequestSynchronous([], rmPOST, Data, nil);
     fLastReceivedMsg := now;
     if Response.StatusOk then
     begin
@@ -989,17 +1030,14 @@ var
   Response: IFirebaseResponse;
   Data, Res: TJSONObject;
 begin
-  Assert(assigned(fAuth), 'Authentication is required');
   Assert(Transaction.NumberOfTransactions > 0, 'No transactions');
-  Request := TFirebaseRequest.Create(
-    GOOGLE_FIRESTORE_API_URL + METHODE_COMMITTRANS, rsCommitTrans, fAuth);
+  Request := TFirebaseRequest.Create(BaseURI + METHODE_COMMITTRANS,
+    rsCommitTrans, fAuth);
   Data := TJSONObject.Create;
   Data.AddPair('writes',
     (Transaction as TFirestoreWriteTransaction).GetWritesObjArray);
   try
-    Response := Request.SendRequestSynchronous(
-      TFirestoreDocument.GetDocFullPath(fProjectID, fDatabaseID), rmPOST, Data,
-      nil);
+    Response := Request.SendRequestSynchronous([], rmPOST, Data, nil);
     fLastReceivedMsg := now;
     if Response.StatusOk then
     begin
@@ -1024,14 +1062,13 @@ var
   Request: IFirebaseRequest;
   Data: TJSONObject;
 begin
-  Assert(assigned(fAuth), 'Authentication is required');
-  Request := TFirebaseRequest.Create(
-    GOOGLE_FIRESTORE_API_URL + METHODE_COMMITTRANS, rsCommitTrans, fAuth);
+  Request := TFirebaseRequest.Create(BaseURI + METHODE_COMMITTRANS,
+    rsCommitTrans, fAuth);
   Data := TJSONObject.Create;
   Data.AddPair('writes',
     (Transaction as TFirestoreWriteTransaction).GetWritesObjArray);
-  Request.SendRequest(TFirestoreDocument.GetDocFullPath(fProjectID, fDatabaseID),
-    rmPOST, Data, nil, tmBearer, CommitWriteTransactionResp, OnRequestError,
+  Request.SendRequest([], rmPOST, Data, nil, tmBearer,
+    CommitWriteTransactionResp, OnRequestError,
     TOnSuccess.CreateFirestoreCommitWriteTransaction(OnCommitWriteTransaction));
 end;
 
@@ -1088,6 +1125,17 @@ end;
 
 procedure TFirestoreDatabase.StartListener(OnStopListening: TOnStopListenEvent;
   OnError: TOnRequestError; OnAuthRevoked: TOnAuthRevokedEvent;
+  OnConnectionStateChange: TOnConnectionStateChange;
+  DoNotSynchronizeEvents: boolean);
+begin
+  fListener.RegisterEvents(OnStopListening, OnError, OnAuthRevoked,
+    OnConnectionStateChange, DoNotSynchronizeEvents);
+  fListener.Start;
+end;
+
+procedure TFirestoreDatabase.StartListener(
+  OnStopListening: TOnStopListenEventDeprecated; OnError: TOnRequestError;
+  OnAuthRevoked: TOnAuthRevokedEvent;
   OnConnectionStateChange: TOnConnectionStateChange;
   DoNotSynchronizeEvents: boolean);
 begin
@@ -1434,8 +1482,30 @@ end;
 constructor TQueryFilter.Create(const Where, Value: string; Op: TWhereOperator);
 const
   cWhereOperationStr: array [TWhereOperator] of string =
-    ('?', '<', '≤', '>', '≥', '=', #2208);
-  // Attention U+2208 (Element of) is not yet in all MS fonts
+    // woUnspecific
+    ('?',
+    // woLessThan
+     '<',
+    // woLessThanOrEqual
+    '≤',
+    // woGreaterThan
+    '>',
+    // woGreaterThanOrEqual
+    '≥',
+    // woEqual
+    '=',
+    // woNotEqual
+    '≠',
+    // woArrayContains
+    #$2208, // Attention U+2208 (Element of) is not yet in all MS fonts
+    // woInArray
+    #$220B, // Attention U+220B (contains as member) is not yet in all MS fonts
+    // woArrayContainsAny
+    #$2258, // Attention U+220C (corresponds to) is not yet in all MS fonts
+    // woNotInArray
+    #$220C // Attention U+220C (does not contain as member) is not yet in all MS fonts
+    );
+
 begin
   inherited Create;
   fFilter := TJSONObject.Create;
@@ -1517,6 +1587,18 @@ begin
   fWritesObjArray.Add(Obj);
 end;
 
+procedure TFirestoreWriteTransaction.TransformDoc(const FullDocumentName: string;
+  Transform: IFirestoreDocTransform);
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  Obj.AddPair('transform', TJSONObject.ParseJSONValue(
+    TFirestoreDocTransform(Transform).AsJSON(FullDocumentName)));
+  // Document need to be cloned here;
+  fWritesObjArray.Add(Obj);
+end;
+
 procedure TFirestoreWriteTransaction.DeleteDoc(const DocumentFullPath: string);
 begin
   fWritesObjArray.Add(TJSONObject.Create(TJSONPair.Create('delete',
@@ -1568,6 +1650,82 @@ begin
   result := fCommitTime;
   if TimeZone = tzLocalTime then
     result := TFirebaseHelpers.ConvertToLocalDateTime(result);
+end;
+
+{ TFirestoreDocTransform }
+
+constructor TFirestoreDocTransform.Create;
+begin
+  fFieldTransforms := TJSONArray.Create;
+end;
+
+destructor TFirestoreDocTransform.Destroy;
+begin
+  fFieldTransforms.Free;
+  inherited;
+end;
+
+function TFirestoreDocTransform.SetServerTime(
+  const FieldName: string): IFirestoreDocTransform;
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  Obj.AddPair('fieldPath', FieldName);
+  Obj.AddPair('setToServerValue', 'REQUEST_TIME');
+  fFieldTransforms.Add(Obj);
+  result := self;
+end;
+
+function TFirestoreDocTransform.Increment(const FieldName: string;
+  Value: TJSONObject): IFirestoreDocTransform;
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  Obj.AddPair('fieldPath', FieldName);
+  Obj.AddPair('increment', Value);
+  fFieldTransforms.Add(Obj);
+  result := self;
+end;
+
+function TFirestoreDocTransform.Maximum(const FieldName: string;
+  Value: TJSONObject): IFirestoreDocTransform;
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  Obj.AddPair('fieldPath', FieldName);
+  Obj.AddPair('maximum', Value);
+  fFieldTransforms.Add(Obj);
+  result := self;
+end;
+
+function TFirestoreDocTransform.Minimum(const FieldName: string;
+  Value: TJSONObject): IFirestoreDocTransform;
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  Obj.AddPair('fieldPath', FieldName);
+  Obj.AddPair('minimum', Value);
+  fFieldTransforms.Add(Obj);
+  result := self;
+end;
+
+function TFirestoreDocTransform.AsJSON(const DocumentFullName: string): string;
+var
+  Obj: TJSONObject;
+begin
+  Obj := TJSONObject.Create;
+  try
+    Obj.AddPair('document', DocumentFullName);
+    if fFieldTransforms.Count > 0 then
+      Obj.AddPair('fieldTransforms', fFieldTransforms.Clone as TJSONArray);
+    result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
 end;
 
 end.
